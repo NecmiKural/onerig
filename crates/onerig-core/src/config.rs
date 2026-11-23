@@ -46,6 +46,18 @@ pub enum HarnessKind {
     Fake,
 }
 
+impl HarnessKind {
+    /// The name used in the configuration file.
+    pub fn name(self) -> &'static str {
+        match self {
+            HarnessKind::Claude => "claude",
+            HarnessKind::Agy => "agy",
+            HarnessKind::Codex => "codex",
+            HarnessKind::Fake => "fake",
+        }
+    }
+}
+
 /// How an `agy` lane is driven. Lanes of every other harness are always `Direct`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -300,7 +312,7 @@ fn lane_from(name: &str, raw: &RawLane, allow_fake: bool) -> Result<Lane, Config
         bin: raw
             .bin
             .clone()
-            .unwrap_or_else(|| harness_name(harness).to_string()),
+            .unwrap_or_else(|| harness.name().to_string()),
         model: required(
             name,
             "model",
@@ -335,15 +347,6 @@ fn harness_kind(name: &str, text: &str, allow_fake: bool) -> Result<HarnessKind,
     }
 }
 
-fn harness_name(harness: HarnessKind) -> &'static str {
-    match harness {
-        HarnessKind::Claude => "claude",
-        HarnessKind::Agy => "agy",
-        HarnessKind::Codex => "codex",
-        HarnessKind::Fake => "fake",
-    }
-}
-
 fn check_keys_apply(name: &str, raw: &RawLane, harness: HarnessKind) -> Result<(), ConfigError> {
     use HarnessKind::{Agy, Claude, Codex, Fake};
     let rules: [(&str, bool, &[HarnessKind]); 6] = [
@@ -364,7 +367,7 @@ fn check_keys_apply(name: &str, raw: &RawLane, harness: HarnessKind) -> Result<(
     {
         Some((key, _, _)) => Err(invalid(
             format!("lanes.{name}.{key}"),
-            format!("does not apply to a {} lane", harness_name(harness)),
+            format!("does not apply to a {} lane", harness.name()),
         )),
         None => Ok(()),
     }

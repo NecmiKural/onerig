@@ -134,8 +134,16 @@ pub enum LogEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StateEvent {
+    /// Written when a run starts or resumes, so a reader of the log knows it.
+    Run {
+        run_id: String,
+        goal: String,
+        branch: String,
+    },
     Plan {
         tasks: usize,
+        #[serde(default)]
+        titles: Vec<String>,
     },
     Phase {
         phase: Phase,
@@ -716,7 +724,10 @@ mod tests {
             task: None,
             attempt: None,
             lane: None,
-            entry: LogEntry::State(StateEvent::Plan { tasks }),
+            entry: LogEntry::State(StateEvent::Plan {
+                tasks,
+                titles: vec![],
+            }),
         };
 
         dir.append_log(&record(1)).unwrap();

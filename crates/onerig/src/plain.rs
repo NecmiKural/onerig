@@ -21,14 +21,19 @@ fn state_line(record: &LogRecord, event: &StateEvent) -> Option<String> {
     let task = record.task.map(|n| format!("t{n}")).unwrap_or_default();
     Some(match event {
         StateEvent::Phase { .. } => return None,
-        StateEvent::Plan { tasks: 1 } => "plan      1 task".to_string(),
-        StateEvent::Plan { tasks } => format!("plan      {tasks} tasks"),
+        StateEvent::Run { run_id, goal, .. } => format!("run       {run_id}: {goal}"),
+        StateEvent::Plan { tasks, .. } => plan_text(*tasks),
         StateEvent::Verdict { verdict, .. } => format!("{task} review       {}", word(verdict)),
         StateEvent::Commit { hash, title } => format!("{task} commit       {hash} {title}"),
         StateEvent::Paused { reason, message } => format!("paused    {}: {message}", word(reason)),
         StateEvent::Done { branch } => format!("done      branch {branch}"),
         StateEvent::Failed { message } => format!("failed    {message}"),
     })
+}
+
+fn plan_text(tasks: usize) -> String {
+    let noun = if tasks == 1 { "task" } else { "tasks" };
+    format!("plan      {tasks} {noun}")
 }
 
 fn policy_line(record: &LogRecord, event: &PolicyEvent) -> String {
@@ -161,7 +166,10 @@ mod tests {
             None,
             None,
             None,
-            LogEntry::State(StateEvent::Plan { tasks: 3 }),
+            LogEntry::State(StateEvent::Plan {
+                tasks: 3,
+                titles: vec![],
+            }),
         );
         let verdict = record(
             Some(1),
@@ -196,7 +204,10 @@ mod tests {
             None,
             None,
             None,
-            LogEntry::State(StateEvent::Plan { tasks: 1 }),
+            LogEntry::State(StateEvent::Plan {
+                tasks: 1,
+                titles: vec![],
+            }),
         );
         assert_eq!(line(&one).unwrap(), "20:15:01 plan      1 task");
         assert_eq!(line(&verdict).unwrap(), "20:15:01 t1 review       approve");
@@ -205,6 +216,42 @@ mod tests {
             "20:15:01 paused    no_lane: deepseek: quota exhausted"
         );
         assert_eq!(line(&done).unwrap(), "20:15:01 done      branch onerig/x");
+        let run = record(
+            None,
+            None,
+            None,
+            LogEntry::State(StateEvent::Run {
+                run_id: "r1".into(),
+                goal: "Add retries".into(),
+                branch: "onerig/r1".into(),
+            }),
+        );
+        assert_eq!(line(&run).unwrap(), "20:15:01 run       r1: Add retries");
+        let commit = record(
+            Some(2),
+            None,
+            None,
+            LogEntry::State(StateEvent::Commit {
+                hash: "4c1d2aa".into(),
+                title: "Add retries".into(),
+            }),
+        );
+        let failed = record(
+            None,
+            None,
+            None,
+            LogEntry::State(StateEvent::Failed {
+                message: "the planner failed twice".into(),
+            }),
+        );
+        assert_eq!(
+            line(&commit).unwrap(),
+            "20:15:01 t2 commit       4c1d2aa Add retries"
+        );
+        assert_eq!(
+            line(&failed).unwrap(),
+            "20:15:01 failed    the planner failed twice"
+        );
     }
 
     #[test]

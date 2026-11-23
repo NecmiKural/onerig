@@ -1,12 +1,16 @@
-//! The `onerig` command: `run` starts a run, `resume` continues one.
+//! The `onerig` command: `run` starts a run, `resume` continues one, `doctor`
+//! checks the lanes.
 
+mod doctor;
 mod lanes;
 mod plain;
+mod tui;
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -38,6 +42,12 @@ enum Command {
         #[command(flatten)]
         options: Options,
     },
+    /// Check that every lane can run. Makes no model call.
+    Doctor {
+        /// Configuration file; default $XDG_CONFIG_HOME/onerig/config.toml.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -60,32 +70,116 @@ fn main() -> ExitCode {
     }
 }
 
+/// What a `run` or `resume` needs besides the runner.
+struct Session<'s> {
+    command: &'s Command,
+    config: &'s Config,
+    cwd: &'s Path,
+    data: &'s Path,
+    stop: &'s Arc<AtomicBool>,
+}
+
 fn run_cli(cli: Cli) -> anyhow::Result<ExitCode> {
-    let (Command::Run { options, .. } | Command::Resume { options, .. }) = &cli.command;
-    let Some(config) = load_config(options.config.as_deref())? else {
+    let (config_arg, plain_wanted) = config_and_mode(&cli.command);
+    let Some(config) = load_config(config_arg)? else {
         return Ok(ExitCode::from(2));
     };
     let stop = watch_signals()?;
     let data = data_dir()?;
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
     let mut runner = lanes::Lanes::build(&config, &stop, &cwd, &data)?;
-    let git = Git::new();
-    let mut sink = |record: &LogRecord| {
-        if let Some(line) = plain::line(record) {
-            println!("{line}");
-        }
+    if let Command::Doctor { .. } = cli.command {
+        return Ok(run_doctor(&config, &mut runner));
+    }
+    let session = Session {
+        command: &cli.command,
+        config: &config,
+        cwd: &cwd,
+        data: &data,
+        stop: &stop,
     };
+    run_session(&session, &mut runner, plain_wanted)
+}
+
+/// The configuration file to use, and whether plain output was asked for.
+fn config_and_mode(command: &Command) -> (Option<&Path>, bool) {
+    match command {
+        Command::Run { options, .. } | Command::Resume { options, .. } => {
+            (options.config.as_deref(), options.plain)
+        }
+        Command::Doctor { config } => (config.as_deref(), true),
+    }
+}
+
+fn run_doctor(config: &Config, runner: &mut lanes::Lanes) -> ExitCode {
+    let (lines, ready) = doctor::report(config, runner);
+    lines.iter().for_each(|line| println!("{line}"));
+    if ready {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+fn run_session(
+    session: &Session<'_>,
+    runner: &mut lanes::Lanes,
+    plain_wanted: bool,
+) -> anyhow::Result<ExitCode> {
+    if let Command::Run { .. } = session.command {
+        warn_if_dirty(&Git::new(), session.cwd);
+    }
+    if plain_wanted || !std::io::stdout().is_terminal() {
+        execute(session, runner, &mut |record| {
+            if let Some(line) = plain::line(record) {
+                println!("{line}");
+            }
+        })
+    } else {
+        execute_on_screen(session, runner)
+    }
+}
+
+fn execute(
+    session: &Session<'_>,
+    runner: &mut lanes::Lanes,
+    sink: &mut dyn FnMut(&LogRecord),
+) -> anyhow::Result<ExitCode> {
+    let git = Git::new();
     let env = Env {
         git: &git,
-        runner: &mut runner,
+        runner,
         clock: &now_ms,
         pid: std::process::id(),
-        stop: &stop,
-        sink: &mut sink,
-        data_home: &data,
+        stop: session.stop,
+        sink,
+        data_home: session.data,
     };
-    let finished = dispatch(&cli.command, &config, &cwd, env)?;
+    let finished = dispatch(session.command, session.config, session.cwd, env)?;
     Ok(exit_code(&finished))
+}
+
+/// The terminal UI owns the screen until the run stops; what it ended with
+/// stays on the terminal afterwards.
+fn execute_on_screen(session: &Session<'_>, runner: &mut lanes::Lanes) -> anyhow::Result<ExitCode> {
+    let mut screen = tui::Screen::new(session.config);
+    let finished = Arc::new(AtomicBool::new(false));
+    let mut terminal = ratatui::init();
+    let keys = tui::watch_keys(Arc::clone(session.stop), Arc::clone(&finished));
+    // A frame that cannot be drawn is skipped; the next record draws again.
+    let _ = terminal.draw(|frame| screen.render(frame));
+    let result = execute(session, runner, &mut |record| {
+        screen.apply(record);
+        let _ = terminal.draw(|frame| screen.render(frame));
+    });
+    finished.store(true, Ordering::Relaxed);
+    let _ = keys.join();
+    ratatui::restore();
+    screen
+        .closing_lines()
+        .iter()
+        .for_each(|line| println!("{line}"));
+    result
 }
 
 fn dispatch<'a>(
@@ -95,11 +189,9 @@ fn dispatch<'a>(
     env: Env<'a>,
 ) -> Result<Finished, run::RunError> {
     match command {
-        Command::Run { goal, .. } => {
-            warn_if_dirty(env.git, cwd);
-            run::start(config, cwd, goal, env)
-        }
         Command::Resume { run_id, .. } => run::resume(config, cwd, run_id.as_deref(), env),
+        Command::Run { goal, .. } => run::start(config, cwd, goal, env),
+        Command::Doctor { .. } => unreachable!("doctor is answered before a run starts"),
     }
 }
 

@@ -88,6 +88,7 @@ pub fn start<'a>(
     env.git.create_run_worktree(&main, &worktree, &branch)?;
     let state = new_state(&run_id, goal, now, main, worktree, branch);
     let mut machine = Machine::new(config, env, dir, lock, state, probes, None);
+    machine.note_run();
     machine.note(LogEntry::State(StateEvent::Phase {
         phase: Phase::Planning,
     }));
@@ -107,6 +108,8 @@ pub fn resume<'a>(
     let plan = state.task_index.map(|_| dir.read_plan()).transpose()?;
     prepare_resume(&mut state);
     let mut machine = Machine::new(config, env, dir, lock, state, probes, plan);
+    machine.note_run();
+    machine.note_plan();
     machine.note(LogEntry::State(StateEvent::Phase {
         phase: machine.state.phase,
     }));
@@ -406,6 +409,28 @@ impl<'a> Machine<'a> {
         );
     }
 
+    fn note_run(&mut self) {
+        let state = &self.state;
+        let entry = LogEntry::State(StateEvent::Run {
+            run_id: state.run_id.clone(),
+            goal: state.goal.clone(),
+            branch: state.branch.clone(),
+        });
+        self.note(entry);
+    }
+
+    /// Nothing before the plan exists.
+    fn note_plan(&mut self) {
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        let titles: Vec<String> = plan.tasks.iter().map(|task| task.title.clone()).collect();
+        self.note(LogEntry::State(StateEvent::Plan {
+            tasks: titles.len(),
+            titles,
+        }));
+    }
+
     fn set_phase(&mut self, phase: Phase) {
         self.state.phase = phase;
         self.note(LogEntry::State(StateEvent::Phase { phase }));
@@ -439,10 +464,8 @@ impl<'a> Machine<'a> {
 
     fn accept_plan(&mut self, plan: Plan) -> Result<(), RunError> {
         self.log.dir.write_plan(&plan)?;
-        self.note(LogEntry::State(StateEvent::Plan {
-            tasks: plan.tasks.len(),
-        }));
         self.plan = Some(plan);
+        self.note_plan();
         self.start_task(1)
     }
 

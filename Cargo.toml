@@ -7,7 +7,6 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/NecmiKural/onerig"
-readme = "README.md"
 keywords = ["agents", "orchestrator", "claude", "codex", "deepseek"]
 categories = ["command-line-utilities", "development-tools"]
 description = "One rig for every agent harness: Claude Code plans and reviews, cheaper harnesses do the work."

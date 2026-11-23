@@ -90,11 +90,19 @@ fn sort_lanes(config: &Config, data_home: &Path) -> anyhow::Result<Sorted> {
     Ok(sorted)
 }
 
-fn lanes_in_roles(config: &Config) -> impl Iterator<Item = &String> {
+/// Every lane named in a role, once, planner first.
+pub fn lanes_in_roles(config: &Config) -> Vec<&String> {
     let roles = &config.roles;
-    [&roles.planner, &roles.reviewer]
+    let mut names: Vec<&String> = Vec::new();
+    for name in [&roles.planner, &roles.reviewer]
         .into_iter()
         .chain(&roles.worker)
+    {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 fn adapter_for(name: &str, lane: &Lane, data_home: &Path) -> anyhow::Result<Box<dyn Adapter>> {

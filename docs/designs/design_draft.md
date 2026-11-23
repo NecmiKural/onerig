@@ -1,9 +1,9 @@
 # onerig — design draft
 
 Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 3
-are done: a real run plans with Claude Code, works with DeepSeek through Codex,
-reviews with Claude Code and commits. Left: `agy` direct mode (step 4), the
-terminal UI and `onerig doctor` (step 5). Drafts 2 and 3 resolve the findings of two rounds of independent
+and 5 are done: a real run plans with Claude Code, works with DeepSeek through
+Codex, reviews with Claude Code and commits, shown in the terminal UI; `onerig
+doctor` checks the lanes. Left: `agy` direct mode (step 4). Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
@@ -919,8 +919,12 @@ One screen, fed by the same records as `--plain`:
 + q quit (the run can be resumed) -------------------------------------------+
 ```
 
-The only key is `q`. A quota bar is shown for a lane whose harness reports
-quota, which in the first release means an `agy` lane in `direct` mode.
+The only key is `q` (Ctrl-C does the same, since the terminal is in raw
+mode). Until the first event arrives, while the lanes are probed, the activity
+panel shows a ring and the name. When the run stops, the screen closes and the
+final line (done, failed, or the pause message with its by-hand instructions)
+stays on the terminal. A quota bar for lanes that report quota is left for
+`agy` direct mode.
 
 ## 15. Safety
 
@@ -1000,7 +1004,7 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Done 2026-11-24: fixture tests pass; on a toy repository Claude planned through onerig, a person did the task in the manual lane, and Claude's review approved it into one commit. | yes |
 | 3 | Codex adapter with DeepSeek. | Done 2026-11-24: on a toy repository Claude planned, DeepSeek did the task through Codex, Claude approved, and the run ended as one commit in 39 s. | yes |
 | 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to Codex. | yes |
-| 5 | Terminal UI and `doctor`. | The screen in section 14 shows a fake run; `doctor` prints one line per lane. | no |
+| 5 | Terminal UI and `doctor`. | Done 2026-11-24: the screen shows a scripted run in a real pseudo-terminal and leaves the final line behind; `doctor` prints one line per lane and exits 1 when a probed lane is not ready. | no |
 
 Step 1 does not wait for step 0. If the owner declines the live calls, step 0
 is folded into steps 2 and 3.

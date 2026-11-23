@@ -11,8 +11,7 @@ API key.
 > **Status: early.** The whole loop (plan, work, review, commit, pause,
 > resume) runs end to end with real harnesses: Claude Code plans and reviews,
 > DeepSeek works through Codex, and `agy` works as a manual lane. Driving `agy`
-> directly, the terminal UI and `onerig doctor` are not built yet. Not
-> published to any package registry yet.
+> directly is not built yet. Not published to any package registry yet.
 
 ## How a run works
 
@@ -92,10 +91,13 @@ you accept that risk for your own account.
 ```text
 onerig run "<goal>"        start a run in the current repository
 onerig resume [<run id>]   continue the latest (or the given) unfinished run
+onerig doctor              check every lane; makes no model call
 ```
 
-`--plain` prints one line per event. Exit codes: 0 done, 1 failed, 2 usage or
-configuration error, 3 paused.
+In a terminal, `run` and `resume` show a live screen with the tasks, the lanes
+and the activity; `q` stops the run so that `resume` can continue it later.
+`--plain` prints one line per event instead. Exit codes: 0 done, 1 failed,
+2 usage or configuration error, 3 paused.
 
 ## Working with copass
 

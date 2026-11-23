@@ -266,3 +266,25 @@ fn resume_without_a_run_explains_and_exits_2() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("no run to resume"));
 }
+
+#[test]
+fn doctor_reports_every_lane_without_running_anything() {
+    let world = world(vec![]);
+    let output = world
+        .command(env!("CARGO_BIN_EXE_onerig"))
+        .args(["doctor", "--config"])
+        .arg(world.root.join("config.toml"))
+        .output()
+        .unwrap();
+
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(0), "{text}");
+    assert_eq!(
+        text.lines().collect::<Vec<_>>(),
+        [
+            "plan       fake   ok fake",
+            "review     fake   ok fake",
+            "w1         fake   ok fake"
+        ]
+    );
+}
