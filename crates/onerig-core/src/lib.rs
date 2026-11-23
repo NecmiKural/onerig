@@ -9,6 +9,7 @@ pub mod plan;
 pub mod policy;
 pub mod process;
 pub mod prompt;
+pub mod run;
 pub mod runner;
 pub mod store;
 pub mod worktree;

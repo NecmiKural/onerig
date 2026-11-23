@@ -107,6 +107,24 @@ impl Git {
         Git::default()
     }
 
+    /// Ignores the global and system git configuration, so a developer's
+    /// signing or hooks cannot leak into tests.
+    #[cfg(test)]
+    pub(crate) fn isolated() -> Git {
+        Git {
+            envs: vec![
+                ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ],
+        }
+    }
+
+    /// Runs `git` with the given arguments in `dir`; for test setup.
+    #[cfg(test)]
+    pub(crate) fn must(&self, dir: &Path, args: &[&str]) -> String {
+        self.run(dir, args).unwrap_or_else(|e| panic!("{e}"))
+    }
+
     fn command(&self, dir: &Path, args: &[&str]) -> Command {
         let mut command = Command::new("git");
         command
@@ -356,16 +374,7 @@ mod tests {
         assert_eq!(with_exclude_line("a\n.onerig/\nb\n"), None);
     }
 
-    // Integration tests against real repositories. The global and system git
-    // configuration is ignored so a developer's signing or hooks cannot leak in.
-    fn isolated() -> Git {
-        Git {
-            envs: vec![
-                ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
-                ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
-            ],
-        }
-    }
+    // Integration tests against real repositories.
 
     struct Repo {
         _dir: tempfile::TempDir,
@@ -395,7 +404,7 @@ mod tests {
         let repo = Repo {
             _dir: dir,
             main,
-            git: isolated(),
+            git: Git::isolated(),
         };
         repo.git(&repo.main, &["init", "-q", "-b", "main"]);
         repo.git(&repo.main, &["config", "user.name", "Test"]);
@@ -421,7 +430,7 @@ mod tests {
     #[test]
     fn preflight_needs_a_commit_and_an_identity() {
         let empty = tempfile::tempdir().unwrap();
-        let git = isolated();
+        let git = Git::isolated();
         git.run(empty.path(), &["init", "-q"]).unwrap();
         let repo = repo();
 

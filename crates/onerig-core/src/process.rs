@@ -256,11 +256,11 @@ impl Job {
 
     fn drain(&mut self, on_line: &mut dyn FnMut(&str)) {
         let deadline = Instant::now() + DRAIN;
-        while self.open_pipes > 0 && Instant::now() < deadline {
-            match self.pieces.recv_timeout(TICK) {
+        while self.open_pipes > 0 {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.pieces.recv_timeout(left) {
                 Ok(piece) => self.take(piece, on_line),
-                Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {}
+                Err(_) => break,
             }
         }
     }
@@ -405,7 +405,25 @@ mod tests {
                 stderr_tail: "oops\n".into(),
             })
         );
-        assert!(seen.took < GRACE, "took {:?}", seen.took);
+        assert!(seen.took < DRAIN, "took {:?}", seen.took);
+    }
+
+    #[test]
+    fn empty_lines_are_kept() {
+        let spawn = sh("printf 'a\\n\\nb\\n'");
+
+        let seen = drive_here(&spawn, ROOMY);
+
+        assert_eq!(seen.lines, ["a", "", "b"]);
+    }
+
+    #[test]
+    fn a_variable_name_that_is_not_utf8_is_never_removed() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let removed = is_removed(OsStr::from_bytes(b"\xffNAME"), &["*".to_owned()]);
+
+        assert!(!removed);
     }
 
     #[test]

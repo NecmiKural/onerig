@@ -416,6 +416,17 @@ Do not run git commit.
     }
 
     #[test]
+    fn a_cut_that_would_split_a_character_moves_back_before_it() {
+        // One ASCII byte first puts the 60 000th byte inside an 'é'.
+        let diff = format!("x{}", "é".repeat(DIFF_LIMIT / 2));
+
+        let cut = cut_diff(&diff);
+
+        let kept = cut.strip_suffix(&format!("\n{TRUNCATED}\n")).unwrap();
+        assert_eq!(kept.len(), DIFF_LIMIT - 1);
+    }
+
+    #[test]
     fn the_output_tail_keeps_short_text_whole() {
         assert_eq!(output_tail("short"), "short");
     }

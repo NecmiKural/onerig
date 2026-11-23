@@ -459,9 +459,9 @@ impl Lock {
         };
         let text = serde_json::to_string(&content).unwrap_or_default();
         let mut write = || -> std::io::Result<()> {
-            self.file.set_len(0)?;
             self.file.seek(SeekFrom::Start(0))?;
             self.file.write_all(text.as_bytes())?;
+            self.file.set_len(text.len() as u64)?;
             self.file.sync_data()
         };
         write().map_err(|e| LockError::Io {
@@ -484,7 +484,8 @@ fn try_flock(file: &File) -> bool {
 
 /// Signal 0 checks that a process group exists without touching it.
 fn group_exists(pgid: i32) -> bool {
-    if pgid <= 0 {
+    // 0 would address this process's own group and 1 every process.
+    if pgid <= 1 {
         return false;
     }
     // SAFETY: kill with signal 0 sends nothing; it only checks the target.
@@ -773,7 +774,13 @@ mod tests {
 
         assert!(matches!(Lock::acquire(&dir), Err(LockError::Held { .. })));
         drop(first);
-        assert!(Lock::acquire(&dir).is_ok());
+        // Other tests fork children in parallel; a child between fork and exec
+        // briefly holds a copy of the descriptor, and with it the lock.
+        let reacquired = (0..200).any(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            Lock::acquire(&dir).is_ok()
+        });
+        assert!(reacquired);
     }
 
     #[test]
@@ -823,5 +830,52 @@ mod tests {
         let _lock = Lock::acquire(&dir).unwrap();
 
         assert_eq!(lock_content(&dir)["pgid"], json!(null));
+    }
+
+    #[test]
+    fn a_state_without_a_version_is_refused_as_version_zero() {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = RunDir::create(repo.path(), "r1").unwrap();
+        std::fs::write(dir.path().join("state.json"), "{}").unwrap();
+
+        assert!(matches!(
+            dir.read_state(),
+            Err(StoreError::Version { found: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn a_shorter_lock_content_replaces_a_longer_one_completely() {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = RunDir::create(repo.path(), "r1").unwrap();
+        let mut lock = Lock::acquire(&dir).unwrap();
+
+        lock.set_pgid(Some(1_234_567)).unwrap();
+        lock.set_pgid(None).unwrap();
+
+        assert_eq!(lock_content(&dir)["pgid"], json!(null));
+    }
+
+    #[test]
+    fn only_a_real_process_group_counts_as_existing() {
+        // SAFETY: getpgrp has no preconditions.
+        let own_group = unsafe { libc::getpgrp() };
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let child_pid = child.id() as i32;
+
+        let results = [
+            group_exists(0),
+            group_exists(1),
+            group_exists(own_group),
+            group_exists(child_pid),
+        ];
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        // The child shares this process's group, so no group has its pid as id.
+        assert_eq!(results, [false, false, true, false]);
     }
 }
