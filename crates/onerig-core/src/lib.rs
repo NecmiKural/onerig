@@ -1,0 +1,7 @@
+//! Core library of onerig: the run state machine, lane policy and harness
+//! adapters. It has no terminal or argument-parsing dependencies, so a
+//! command-line tool, a terminal UI or a GUI can all be built on it.
+
+pub mod adapter;
+pub mod plan;
+pub mod runner;

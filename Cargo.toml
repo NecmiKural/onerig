@@ -1,0 +1,15 @@
+[workspace]
+members = ["crates/onerig-core", "crates/onerig"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "One rig for every agent harness: Claude Code plans and reviews, cheaper harnesses do the work."
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
