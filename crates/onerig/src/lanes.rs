@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context, bail};
 use onerig_core::adapter::Adapter;
 use onerig_core::adapter::claude::Claude;
+use onerig_core::adapter::codex::Codex;
 use onerig_core::config::{Config, HarnessKind, Lane};
 use onerig_core::fake::FakeRunner;
 use onerig_core::harness::HarnessRunner;
@@ -22,12 +23,18 @@ pub struct Lanes {
 }
 
 impl Lanes {
-    pub fn build(config: &Config, stop: &Arc<AtomicBool>, cwd: &Path) -> anyhow::Result<Lanes> {
+    /// `data_home` is where lanes that need a directory of their own keep it.
+    pub fn build(
+        config: &Config,
+        stop: &Arc<AtomicBool>,
+        cwd: &Path,
+        data_home: &Path,
+    ) -> anyhow::Result<Lanes> {
         let Sorted {
             adapters,
             scripted_lanes,
             script,
-        } = sort_lanes(config)?;
+        } = sort_lanes(config, data_home)?;
         let scripted = match script {
             Some(path) => Some(
                 FakeRunner::new(&path, Arc::clone(stop)).context("cannot load the fake script")?,
@@ -60,7 +67,7 @@ struct Sorted {
     script: Option<PathBuf>,
 }
 
-fn sort_lanes(config: &Config) -> anyhow::Result<Sorted> {
+fn sort_lanes(config: &Config, data_home: &Path) -> anyhow::Result<Sorted> {
     let mut sorted = Sorted {
         adapters: BTreeMap::new(),
         scripted_lanes: BTreeSet::new(),
@@ -77,7 +84,7 @@ fn sort_lanes(config: &Config) -> anyhow::Result<Sorted> {
         } else {
             sorted
                 .adapters
-                .insert(name.clone(), adapter_for(name, lane)?);
+                .insert(name.clone(), adapter_for(name, lane, data_home)?);
         }
     }
     Ok(sorted)
@@ -90,12 +97,12 @@ fn lanes_in_roles(config: &Config) -> impl Iterator<Item = &String> {
         .chain(&roles.worker)
 }
 
-fn adapter_for(name: &str, lane: &Lane) -> anyhow::Result<Box<dyn Adapter>> {
+fn adapter_for(name: &str, lane: &Lane, data_home: &Path) -> anyhow::Result<Box<dyn Adapter>> {
     match lane.harness {
         HarnessKind::Claude => Ok(Box::new(Claude::new(lane))),
-        HarnessKind::Codex | HarnessKind::Agy | HarnessKind::Fake => bail!(
-            "lane {name}: onerig cannot drive this harness yet; only claude, scripted lanes and a \
-             manual agy lane work in this build"
+        HarnessKind::Codex => Ok(Box::new(Codex::new(name, lane, data_home))),
+        HarnessKind::Agy | HarnessKind::Fake => bail!(
+            "lane {name}: onerig cannot drive agy itself yet; use mode = \"handover\" for now"
         ),
     }
 }
@@ -152,7 +159,7 @@ mod tests {
         let config = config_with("\"w\", \"gemini\"", "", script.path());
         let stop = Arc::new(AtomicBool::new(false));
 
-        let mut lanes = Lanes::build(&config, &stop, Path::new(".")).unwrap();
+        let mut lanes = Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).unwrap();
 
         assert_eq!(
             lanes.quota("w"),
@@ -165,18 +172,32 @@ mod tests {
     }
 
     #[test]
-    fn a_lane_whose_adapter_is_not_built_yet_stops_the_command() {
+    fn a_direct_agy_lane_is_refused_until_its_adapter_exists() {
+        let script = script();
+        let direct = "mode = \"direct\"\nquota_group = \"G\"\naccept_vendor_terms_risk = true\n";
+        let config = config_with("\"gemini\"", direct, script.path());
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let error = Lanes::build(&config, &stop, Path::new("."), Path::new("/data"))
+            .err()
+            .unwrap();
+
+        assert!(
+            error
+                .to_string()
+                .starts_with("lane gemini: onerig cannot drive agy itself yet")
+        );
+    }
+
+    #[test]
+    fn a_codex_lane_gets_its_adapter() {
         let script = script();
         let codex = "\n[lanes.deepseek]\nharness = \"codex\"\nmodel = \"deepseek-flash\"\n";
         let config = config_with("\"deepseek\"", codex, script.path());
         let stop = Arc::new(AtomicBool::new(false));
 
-        let error = Lanes::build(&config, &stop, Path::new(".")).err().unwrap();
+        let mut lanes = Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).unwrap();
 
-        assert!(
-            error
-                .to_string()
-                .starts_with("lane deepseek: onerig cannot drive")
-        );
+        assert_eq!(lanes.quota("deepseek"), None);
     }
 }

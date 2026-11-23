@@ -452,8 +452,8 @@ impl<'a> Machine<'a> {
         state.task_base = None;
         state.attempt = None;
         state.attempts_used = 0;
+        // Clearing the lane also restarts the Unknown streak at the next attempt.
         state.lane = None;
-        state.unknown_streak = 0;
         state.skipped.clear();
         state.issues.clear();
         state.last_output_tail.clear();

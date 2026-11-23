@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a209e8-5636-7d53-926a-2fb14340fd93"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `deepseek-flash` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: dc5a3105-f4f5-4a79-8c44-04f6cb1f03cb), url: https://api.deepseek.com/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: 24e110f6-1f6d-40f7-a605-5a606e607216), url: https://api.deepseek.com/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: 8e075ff7-fb47-4268-8af3-16bbac03e3a2), url: https://api.deepseek.com/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: 1c829b4a-97ee-459f-bfef-6246a1c94482), url: https://api.deepseek.com/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: b922bb47-89d8-44f5-8a47-3156d43671f5), url: https://api.deepseek.com/responses)"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: a0101c27-2dfb-48cf-9414-30d3d6d0d6f0), url: https://api.deepseek.com/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Authentication Fails, Your api key: ****test is invalid (request_id: a0101c27-2dfb-48cf-9414-30d3d6d0d6f0), url: https://api.deepseek.com/responses"}}

@@ -41,3 +41,4 @@ pub trait Adapter {
 }
 
 pub mod claude;
+pub mod codex;

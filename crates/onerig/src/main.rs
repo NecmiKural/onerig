@@ -68,7 +68,7 @@ fn run_cli(cli: Cli) -> anyhow::Result<ExitCode> {
     let stop = watch_signals()?;
     let data = data_dir()?;
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
-    let mut runner = lanes::Lanes::build(&config, &stop, &cwd)?;
+    let mut runner = lanes::Lanes::build(&config, &stop, &cwd, &data)?;
     let git = Git::new();
     let mut sink = |record: &LogRecord| {
         if let Some(line) = plain::line(record) {
