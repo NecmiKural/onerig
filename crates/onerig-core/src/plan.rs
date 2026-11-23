@@ -147,7 +147,7 @@ fn check_task(task: &Task) -> Result<(), FormatError> {
 }
 
 /// The id ends up in file names and log lines, so it is kept to a safe alphabet.
-fn is_valid_id(id: &str) -> bool {
+pub(crate) fn is_valid_id(id: &str) -> bool {
     let is_first = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
     let is_rest = |c: char| is_first(c) || c == '-' || c == '_';
     id.len() <= MAX_ID_CHARS && id.starts_with(is_first) && id.chars().all(is_rest)
