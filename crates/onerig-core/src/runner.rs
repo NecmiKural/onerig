@@ -23,6 +23,8 @@ pub struct Job {
     pub cwd: PathBuf,
     /// Where files a harness call needs are written.
     pub run_dir: PathBuf,
+    /// Where the raw output of a failed job is kept.
+    pub raw_log: PathBuf,
     /// JSON Schema text, when a structured result is wanted.
     pub schema: Option<&'static str>,
 }
