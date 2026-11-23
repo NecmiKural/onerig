@@ -120,9 +120,9 @@ The first real run of each harness must be captured and kept as a test fixture.
    name an ordered list of harness entries with model and effort. The worker
    chain is the fail-over order.
 4. **Quota is a first-class signal.** Check before dispatch where the harness
-   allows it for free (`agy -p /usage`). Classify failures after a run into
-   quota, rate limit, auth, session or unknown. Quota advances the chain; a
-   rate limit waits; nothing else retries blindly.
+   allows it for free (`agy -p /usage`, in `direct` mode only). Classify
+   failures after a run into quota, auth, timeout or unknown. Quota advances
+   the chain; nothing retries without a limit.
 5. **Fail-over carries the task.** The next worker gets a hand-over: the task
    spec, acceptance criteria, the git diff so far and the tail of the previous
    output. copass is an optional richer provider, detected at run time.
