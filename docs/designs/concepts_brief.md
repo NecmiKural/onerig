@@ -45,28 +45,35 @@ Read at source on 2026-11-23, nothing executed:
 - **zeroshot** (Rust) routes roles per graph node but has no Antigravity or
   DeepSeek lane and no automatic resume. **agent-of-empires** (Rust) parks a
   rate-limited agent and offers a manual switch, with no roles.
+- **SpurCode** (Rust TUI, GPL-3.0, very new) is the closest: a planning brain,
+  workers in worktrees, a review lane, and a vendor switch on rate limits. Its
+  README shows no Antigravity or DeepSeek lane and no automatic worker
+  fail-over on quota. It was read, not run.
 - **rune** is a GPL-3.0 Go IDE and terminal multiplexer, not an orchestrator.
-  Borrow ideas only, never code.
+  Borrow ideas only, never code. The same holds for SpurCode's code.
 
-What nobody ships: one binary, no server, an explicit plan/execute/review
-policy, a quota check before dispatch, and automatic fail-over between
-harnesses.
+What was not found in any of them: one binary, no server, an explicit
+plan/execute/review policy, a quota check before dispatch, and automatic
+fail-over between harnesses that include `agy` and `dsh`. The gap is narrow
+and this space moves weekly.
 
 ## What is verified on the owner's machine
 
 Ran locally:
 
-- `claude` 2.1.330, `agy` 1.4.7 on PATH and `agy` 1.5.14 at `~/.gemini/bin/agy`,
-  `dsh` 0.2.2-rc.5 (shipped by the DeepSeek Harness desktop app), `copass`,
-  `cline`, `codex`. Not installed: `opencode`, `pi`.
+- `claude` 2.1.330, `agy` 1.5.14, `dsh` 0.2.2-rc.5 (shipped by the DeepSeek
+  Harness desktop app), `copass`, `cline`, `codex`. Not installed: `opencode`,
+  `pi`.
+- `agy` updates itself: the PATH binary was 1.4.7 and replaced itself with
+  1.5.14 after one `agy models` call during this research.
 - `agy -p /usage --output-format json` returns the quota with `num_turns: 0`
   and zero tokens. Shape: `command.data.groups[].buckets[]` with `window`
   (`weekly` or `5h`), `remaining_fraction` and `reset_time`. Groups today:
   "Gemini Models", "Claude and GPT models", "Gemini 4 Argon".
 - `agy models` lists model slugs and proves the sign-in works.
-- `agy` 1.4.7 has print mode with `--output-format stream-json`,
+- `agy` has print mode with `--output-format stream-json`,
   `--input-format stream-json`, `--conversation`, `--model`, `--mode`,
-  `--sandbox`, `--print-timeout`. It has no `acp` subcommand; 1.5.x does.
+  `--sandbox`, `--print-timeout`. 1.5.x adds an `acp` subcommand.
 - `dsh --profile headless` takes one task (argument or stdin) and exits. Flags:
   `--json` (NDJSON run events), `--session-id`, `--permission-mode`,
   `--approval-policy ask|never`, `--add-dir`.
@@ -100,8 +107,9 @@ The first real run of each harness must be captured and kept as a test fixture.
 5. **Fail-over carries the task.** The next worker gets a hand-over: the task
    spec, acceptance criteria, the git diff so far and the tail of the previous
    output. copass is an optional richer provider, detected at run time.
-6. **One git worktree per task.** Workers write only there. The reviewer reads
-   the diff and has no write tools.
+6. **One git worktree per run.** Tasks run one after another in it, and each
+   approved task becomes one commit. Workers write only there. The reviewer
+   reads the diff and has no write tools.
 7. **Three `agy` modes.** `off`, `handover` (default: write the note, the human
    runs `agy`) and `direct` (opt-in: onerig spawns `agy -p`, with a one-time
    warning that names the vendor terms).
@@ -114,7 +122,7 @@ The first real run of each harness must be captured and kept as a test fixture.
 `onerig run "<goal>"` in a git repository:
 
 1. Claude Code produces a plan as structured tasks.
-2. Each task runs in its own worktree on the first available worker
+2. Each task runs in the run's worktree on the first available worker
    (`dsh headless` by default; `agy` when set to `direct`).
 3. Claude Code reviews the diff and approves or returns issues.
 4. Issues go back to the worker until approved or the loop budget ends.
@@ -153,8 +161,7 @@ The first real run of each harness must be captured and kept as a test fixture.
 
 ## Open questions for the draft
 
-- Which `agy` binary to use when two versions are installed, and the minimum
-  supported version.
+- The minimum supported version of each harness.
 - Planner output schema, and how the reviewer verdict is shaped.
 - Whether plan and review use `--safe-mode` so the user's plugins and hooks
   do not load into every call.
