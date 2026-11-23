@@ -21,6 +21,7 @@ fn state_line(record: &LogRecord, event: &StateEvent) -> Option<String> {
     let task = record.task.map(|n| format!("t{n}")).unwrap_or_default();
     Some(match event {
         StateEvent::Phase { .. } => return None,
+        StateEvent::Plan { tasks: 1 } => "plan      1 task".to_string(),
         StateEvent::Plan { tasks } => format!("plan      {tasks} tasks"),
         StateEvent::Verdict { verdict, .. } => format!("{task} review       {}", word(verdict)),
         StateEvent::Commit { hash, title } => format!("{task} commit       {hash} {title}"),
@@ -191,6 +192,13 @@ mod tests {
         );
 
         assert_eq!(line(&plan).unwrap(), "20:15:01 plan      3 tasks");
+        let one = record(
+            None,
+            None,
+            None,
+            LogEntry::State(StateEvent::Plan { tasks: 1 }),
+        );
+        assert_eq!(line(&one).unwrap(), "20:15:01 plan      1 task");
         assert_eq!(line(&verdict).unwrap(), "20:15:01 t1 review       approve");
         assert_eq!(
             line(&paused).unwrap(),

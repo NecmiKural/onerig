@@ -39,3 +39,5 @@ pub trait Adapter {
     /// The outcome of a job that ended by itself.
     fn outcome(&self, job: &Job, output: &Output) -> Outcome;
 }
+
+pub mod claude;

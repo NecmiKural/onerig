@@ -1,8 +1,8 @@
 # onerig — design draft
 
-Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build step 1 is
-done: the whole loop runs end to end with scripted lanes; no real harness is
-driven yet. Drafts 2 and 3 resolve the findings of two rounds of independent
+Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 2
+are done: the whole loop runs end to end, with Claude Code as planner and
+reviewer; workers are scripted or manual until the Codex adapter (step 3). Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
@@ -993,7 +993,7 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 |------|---------|-----------|--------------|
 | 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one Codex task on DeepSeek (stdout, stderr, exit code). | Done 2026-11-24: the captures are in `crates/onerig-core/tests/fixtures/`. | yes, three small calls |
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
-| 2 | The real runner (adapter plus driver) and the Claude adapter. | Fixture tests pass; a real plan and a real review complete on a toy repository. | yes |
+| 2 | The real runner (adapter plus driver) and the Claude adapter. | Done 2026-11-24: fixture tests pass; on a toy repository Claude planned through onerig, a person did the task in the manual lane, and Claude's review approved it into one commit. | yes |
 | 3 | Codex adapter with DeepSeek. | A real task ends as one commit after an approved review. From here the tool does useful work. | yes |
 | 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to Codex. | yes |
 | 5 | Terminal UI and `doctor`. | The screen in section 14 shows a fake run; `doctor` prints one line per lane. | no |

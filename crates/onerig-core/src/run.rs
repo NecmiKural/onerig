@@ -81,13 +81,13 @@ pub fn start<'a>(
     let now = (env.clock)();
     let run_id = crate::store::run_id(now, env.pid);
     let dir = RunDir::create(&main, &run_id)?;
-    let _lock = Lock::acquire(&dir)?;
+    let lock = Lock::acquire(&dir)?;
     env.git.ensure_excluded(&main)?;
     let worktree = worktree_path(env.data_home, &main, &run_id);
     let branch = format!("onerig/{run_id}");
     env.git.create_run_worktree(&main, &worktree, &branch)?;
     let state = new_state(&run_id, goal, now, main, worktree, branch);
-    let mut machine = Machine::new(config, env, dir, state, probes, None);
+    let mut machine = Machine::new(config, env, dir, lock, state, probes, None);
     machine.note(LogEntry::State(StateEvent::Phase {
         phase: Phase::Planning,
     }));
@@ -102,11 +102,11 @@ pub fn resume<'a>(
     run_id: Option<&str>,
     env: Env<'a>,
 ) -> Result<Finished, RunError> {
-    let (dir, _lock, mut state) = open_run(env.git, cwd, run_id)?;
+    let (dir, lock, mut state) = open_run(env.git, cwd, run_id)?;
     let probes = probe_lanes(config, env.runner)?;
     let plan = state.task_index.map(|_| dir.read_plan()).transpose()?;
     prepare_resume(&mut state);
-    let mut machine = Machine::new(config, env, dir, state, probes, plan);
+    let mut machine = Machine::new(config, env, dir, lock, state, probes, plan);
     machine.note(LogEntry::State(StateEvent::Phase {
         phase: machine.state.phase,
     }));
@@ -309,6 +309,8 @@ struct Machine<'a> {
     stop: &'a AtomicBool,
     clock: &'a dyn Fn() -> u64,
     log: Log<'a>,
+    /// Held for the whole run; records the running harness's process group.
+    lock: Lock,
     probes: Probes,
     plan: Option<Plan>,
     state: State,
@@ -319,6 +321,7 @@ impl<'a> Machine<'a> {
         config: &'a Config,
         env: Env<'a>,
         dir: RunDir,
+        lock: Lock,
         state: State,
         probes: Probes,
         plan: Option<Plan>,
@@ -335,6 +338,7 @@ impl<'a> Machine<'a> {
                 clock: env.clock,
                 error: None,
             },
+            lock,
             probes,
             plan,
             state,
@@ -506,12 +510,23 @@ impl<'a> Machine<'a> {
         let (task, attempt) = (self.state.task_index, self.state.attempt);
         let mut texts: Vec<String> = Vec::new();
         let log = &mut self.log;
-        let outcome = self.runner.run(lane, &job, &mut |event| {
-            if let HarnessEvent::Text { text } = &event {
-                texts.push(text.clone());
-            }
-            log.record(task, attempt, Some(lane), LogEntry::Harness(event));
-        });
+        let lock = &mut self.lock;
+        // A lock that cannot be updated only weakens the orphan check of the
+        // next start, so the job goes on.
+        let outcome = self.runner.run(
+            lane,
+            &job,
+            &mut |pgid| {
+                let _ = lock.set_pgid(Some(pgid));
+            },
+            &mut |event| {
+                if let HarnessEvent::Text { text } = &event {
+                    texts.push(text.clone());
+                }
+                log.record(task, attempt, Some(lane), LogEntry::Harness(event));
+            },
+        );
+        let _ = self.lock.set_pgid(None);
         if self.stop.load(Ordering::Relaxed) {
             return Ok(None);
         }

@@ -1,5 +1,6 @@
 //! The `onerig` command: `run` starts a run, `resume` continues one.
 
+mod lanes;
 mod plain;
 
 use std::path::{Path, PathBuf};
@@ -7,10 +8,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::{Parser, Subcommand};
-use onerig_core::config::{self, Config, ConfigError, HarnessKind};
-use onerig_core::fake::FakeRunner;
+use onerig_core::config::{self, Config, ConfigError};
 use onerig_core::run::{self, Env, Exit, Finished};
 use onerig_core::store::LogRecord;
 use onerig_core::worktree::{Git, data_home};
@@ -66,9 +66,9 @@ fn run_cli(cli: Cli) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::from(2));
     };
     let stop = watch_signals()?;
-    let mut runner = scripted_runner(&config, &stop)?;
     let data = data_dir()?;
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
+    let mut runner = lanes::Lanes::build(&config, &stop, &cwd)?;
     let git = Git::new();
     let mut sink = |record: &LogRecord| {
         if let Some(line) = plain::line(record) {
@@ -148,28 +148,6 @@ fn load_config(given: Option<&Path>) -> anyhow::Result<Option<Config>> {
         }
         Err(error) => Err(error.into()),
     }
-}
-
-// shortcut: only scripted (fake) lanes can run until the harness adapters
-// exist (design build step 2); replace this with the real runner then.
-fn scripted_runner(config: &Config, stop: &Arc<AtomicBool>) -> anyhow::Result<FakeRunner> {
-    let roles = &config.roles;
-    let names = [&roles.planner, &roles.reviewer]
-        .into_iter()
-        .chain(&roles.worker);
-    let mut script = None;
-    for name in names {
-        let lane = &config.lanes[name];
-        match (lane.harness, &lane.script) {
-            (HarnessKind::Fake, Some(path)) => script = Some(path.clone()),
-            (HarnessKind::Agy, _) if lane.is_manual() || lane.is_off() => {}
-            _ => bail!(
-                "lane {name} needs a harness adapter, and onerig cannot drive real harnesses yet"
-            ),
-        }
-    }
-    let script = script.context("no lane names a fake script")?;
-    Ok(FakeRunner::new(&script, Arc::clone(stop))?)
 }
 
 fn warn_if_dirty(git: &Git, cwd: &Path) {

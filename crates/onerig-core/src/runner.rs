@@ -53,6 +53,17 @@ pub enum Outcome {
     },
 }
 
+impl Outcome {
+    /// A failure with no known reset time.
+    pub fn failed(kind: FailureKind, message: impl Into<String>) -> Outcome {
+        Outcome::Failed {
+            kind,
+            message: message.into(),
+            reset_at: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
@@ -94,8 +105,15 @@ pub trait Runner {
     fn preflight(&mut self, lane: &str) -> Result<Probe, ProbeError>;
     /// Remaining quota of a lane, when its harness can report it for free.
     fn quota(&mut self, lane: &str) -> Option<QuotaReport>;
-    /// Run one job to its end, reporting events as they arrive.
-    fn run(&mut self, lane: &str, job: &Job, on_event: &mut dyn FnMut(HarnessEvent)) -> Outcome;
+    /// Run one job to its end. `on_spawn` receives the process group of a
+    /// harness process when it starts; `on_event` each event as it arrives.
+    fn run(
+        &mut self,
+        lane: &str,
+        job: &Job,
+        on_spawn: &mut dyn FnMut(i32),
+        on_event: &mut dyn FnMut(HarnessEvent),
+    ) -> Outcome;
 }
 
 #[cfg(test)]

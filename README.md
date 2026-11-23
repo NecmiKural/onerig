@@ -9,10 +9,10 @@ itself, so every model runs in the harness built for it, on your own login or
 API key.
 
 > **Status: early.** The whole loop (plan, work, review, commit, pause,
-> resume) runs end to end and is tested, but only with scripted test lanes.
-> The adapters that drive real harnesses are being built next; real
-> Claude Code and Codex output has already been captured for them. Not
-> published to any package registry yet.
+> resume) runs end to end. Claude Code already plans and reviews for real;
+> the Codex (DeepSeek) worker adapter is next, and until then a worker lane is
+> either a manual `agy` lane or a scripted test lane. Not published to any
+> package registry yet.
 
 ## How a run works
 

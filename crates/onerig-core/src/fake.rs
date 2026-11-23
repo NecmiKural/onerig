@@ -127,11 +127,7 @@ fn position_file(script: &Path) -> PathBuf {
 }
 
 fn unknown(message: String) -> Outcome {
-    Outcome::Failed {
-        kind: FailureKind::Unknown,
-        message,
-        reset_at: None,
-    }
+    Outcome::failed(FailureKind::Unknown, message)
 }
 
 /// Writes go inside the worktree only.
@@ -178,7 +174,13 @@ impl Runner for FakeRunner {
         self.script.quota.get(lane).copied()
     }
 
-    fn run(&mut self, lane: &str, job: &Job, on_event: &mut dyn FnMut(HarnessEvent)) -> Outcome {
+    fn run(
+        &mut self,
+        lane: &str,
+        job: &Job,
+        _on_spawn: &mut dyn FnMut(i32),
+        on_event: &mut dyn FnMut(HarnessEvent),
+    ) -> Outcome {
         let number = self.position + 1;
         let Some(step) = self.script.steps.get(self.position) else {
             return unknown(format!(
@@ -252,7 +254,7 @@ mod tests {
 
     fn run(runner: &mut FakeRunner, lane: &str, job: &Job) -> (Outcome, Vec<HarnessEvent>) {
         let mut events = Vec::new();
-        let outcome = runner.run(lane, job, &mut |event| events.push(event));
+        let outcome = runner.run(lane, job, &mut |_| {}, &mut |event| events.push(event));
         (outcome, events)
     }
 
