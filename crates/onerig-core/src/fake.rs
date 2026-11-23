@@ -272,7 +272,7 @@ mod tests {
         let setup = setup(json!({
             "preflight": {
                 "old": { "version": "1.2" },
-                "gone": { "error": { "type": "missing", "message": "dsh not found" } }
+                "gone": { "error": { "type": "missing", "message": "codex not found" } }
             },
             "steps": []
         }));
@@ -292,7 +292,7 @@ mod tests {
         );
         assert_eq!(
             runner.preflight("gone"),
-            Err(ProbeError::Missing("dsh not found".into()))
+            Err(ProbeError::Missing("codex not found".into()))
         );
     }
 

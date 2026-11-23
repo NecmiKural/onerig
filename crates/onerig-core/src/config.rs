@@ -41,7 +41,7 @@ pub struct Roles {
 pub enum HarnessKind {
     Claude,
     Agy,
-    Dsh,
+    Codex,
     /// Scripted lane for tests; accepted only when `ONERIG_TEST` is set.
     Fake,
 }
@@ -113,7 +113,7 @@ model = "sonnet"
 effort = "low"
 
 [lanes.deepseek]
-harness = "dsh"
+harness = "codex"
 model = "deepseek-flash"
 
 [lanes.gemini]
@@ -325,13 +325,13 @@ fn harness_kind(name: &str, text: &str, allow_fake: bool) -> Result<HarnessKind,
     match text {
         "claude" => Ok(HarnessKind::Claude),
         "agy" => Ok(HarnessKind::Agy),
-        "dsh" => Ok(HarnessKind::Dsh),
+        "codex" => Ok(HarnessKind::Codex),
         "fake" if allow_fake => Ok(HarnessKind::Fake),
         "fake" => Err(invalid(
             key,
             "fake lanes are for tests and need ONERIG_TEST to be set",
         )),
-        _ => Err(invalid(key, "use claude, agy or dsh")),
+        _ => Err(invalid(key, "use claude, agy or codex")),
     }
 }
 
@@ -339,15 +339,15 @@ fn harness_name(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::Claude => "claude",
         HarnessKind::Agy => "agy",
-        HarnessKind::Dsh => "dsh",
+        HarnessKind::Codex => "codex",
         HarnessKind::Fake => "fake",
     }
 }
 
 fn check_keys_apply(name: &str, raw: &RawLane, harness: HarnessKind) -> Result<(), ConfigError> {
-    use HarnessKind::{Agy, Claude, Dsh, Fake};
+    use HarnessKind::{Agy, Claude, Codex, Fake};
     let rules: [(&str, bool, &[HarnessKind]); 6] = [
-        ("model", raw.model.is_some(), &[Claude, Agy, Dsh]),
+        ("model", raw.model.is_some(), &[Claude, Agy, Codex]),
         ("effort", raw.effort.is_some(), &[Claude]),
         ("mode", raw.mode.is_some(), &[Agy]),
         ("quota_group", raw.quota_group.is_some(), &[Agy]),
@@ -478,7 +478,7 @@ fn worker_lanes(
         if lane.harness == HarnessKind::Claude {
             return Err(invalid(
                 KEY,
-                format!("lane {name} must use harness dsh or agy"),
+                format!("lane {name} must use harness codex or agy"),
             ));
         }
     }
@@ -507,7 +507,7 @@ harness = "claude"
 model = "sonnet"
 
 [lanes.deepseek]
-harness = "dsh"
+harness = "codex"
 model = "deepseek-flash"
 "#;
 
@@ -551,7 +551,7 @@ model = "deepseek-flash"
         assert_eq!(config.run.idle_timeout, Duration::from_secs(300));
         assert_eq!(config.run.job_timeout, Duration::from_secs(1800));
         assert_eq!(config.policy.min_remaining, 0.05);
-        assert_eq!(config.lanes["deepseek"].bin, "dsh");
+        assert_eq!(config.lanes["deepseek"].bin, "codex");
         assert_eq!(config.lanes["plan"].effort, Effort::Medium);
         assert_eq!(config.roles.planner, "plan");
     }
@@ -633,14 +633,14 @@ model = "deepseek-flash"
 
     #[test]
     fn a_lane_name_must_be_safe() {
-        let text = with("\n[lanes.Deep]\nharness = \"dsh\"\nmodel = \"m\"");
+        let text = with("\n[lanes.Deep]\nharness = \"codex\"\nmodel = \"m\"");
 
         assert_eq!(invalid_key(&text), "lanes.Deep");
     }
 
     #[test]
     fn an_unknown_harness_is_rejected() {
-        let text = BASE.replace(r#"harness = "dsh""#, r#"harness = "aider""#);
+        let text = BASE.replace(r#"harness = "codex""#, r#"harness = "aider""#);
 
         assert_eq!(invalid_key(&text), "lanes.deepseek.harness");
     }
@@ -716,11 +716,11 @@ model = "deepseek-flash"
     #[test]
     fn fake_lanes_need_the_test_switch_and_a_script() {
         let fake = BASE.replace(
-            "harness = \"dsh\"\nmodel = \"deepseek-flash\"",
+            "harness = \"codex\"\nmodel = \"deepseek-flash\"",
             "harness = \"fake\"\nscript = \"s.json\"",
         );
         let no_script = BASE.replace(
-            "harness = \"dsh\"\nmodel = \"deepseek-flash\"",
+            "harness = \"codex\"\nmodel = \"deepseek-flash\"",
             "harness = \"fake\"",
         );
 

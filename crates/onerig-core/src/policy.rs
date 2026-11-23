@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn a_lane_whose_probe_failed_is_unavailable_and_gives_the_probe_message() {
         let lanes = [LaneView {
-            probe_error: Some("dsh was not found on PATH"),
+            probe_error: Some("codex was not found on PATH"),
             ..auto("deepseek")
         }];
 
@@ -311,7 +311,7 @@ mod tests {
 
         assert_eq!(
             selected,
-            no_lane("deepseek: dsh was not found on PATH", None)
+            no_lane("deepseek: codex was not found on PATH", None)
         );
     }
 

@@ -305,10 +305,6 @@ impl RunDir {
         self.path.join(format!("raw-{job_seq}.log"))
     }
 
-    pub fn overlay_path(&self) -> PathBuf {
-        self.path.join("dsh-overlay.yml")
-    }
-
     fn state_path(&self) -> PathBuf {
         self.path.join("state.json")
     }
@@ -671,7 +667,6 @@ mod tests {
             "handover-2-3.md"
         );
         assert_eq!(dir.raw_log_path(7).file_name().unwrap(), "raw-7.log");
-        assert_eq!(dir.overlay_path().file_name().unwrap(), "dsh-overlay.yml");
     }
 
     #[test]
