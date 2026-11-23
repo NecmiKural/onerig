@@ -34,6 +34,25 @@ through a model API, so every model runs in the harness it works best in.
 | copass | The two projects stay independent. Each works without the other. |
 | Git | Work on `main`, commit as we go. No push and no public repository until the owner says so. |
 
+## Why Rust
+
+Raw speed is not the reason: onerig spends its time waiting for other
+programs. The reasons are distribution and correctness.
+
+- **One file, no runtime.** Only Rust and Go give that. TypeScript, Python and
+  Java need a runtime on the user's machine or a large bundle, which misses
+  the "lightweight, runs everywhere" goal.
+- **Rust over Go.** The run state machine and the failure policy are enums the
+  compiler checks for missing cases, and harness output is parsed into typed
+  values. A later GUI can link the core library directly. Go is the close
+  second (easier cross-compilation, simpler concurrency) and would be the
+  choice if the maintainer prefers it.
+- **TypeScript** would be the fastest to write and shares an ecosystem with
+  copass, but requires Node.
+
+Switching language is free until the first milestone is built and a rewrite
+after it.
+
 ## Prior art: the gap is real
 
 Read at source on 2026-11-23, nothing executed:
