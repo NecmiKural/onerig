@@ -1,11 +1,9 @@
 # onerig — design draft
 
-Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 3
-and 5 are done, and step 4 is built: a real run plans with Claude Code, works
-with DeepSeek through Codex (or `agy` in direct mode), reviews with Claude Code
-and commits, shown in the terminal UI; `onerig doctor` checks the lanes. Left:
-one live `agy` direct task to capture its event stream, which needs the
-owner's go-ahead because of the vendor terms. Drafts 2 and 3 resolve the findings of two rounds of independent
+Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 5
+are done: a real run plans with Claude Code, works with DeepSeek through Codex
+or with `agy` in direct mode, reviews with Claude Code and commits, shown in
+the terminal UI; `onerig doctor` checks the lanes. Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
@@ -578,27 +576,30 @@ The lane has a `mode`:
 
 Everything below applies to `direct` mode only.
 
-Call **[flags observed in `--help`; behaviour unobserved]**:
+Call **[observed: captured in `tests/fixtures/agy/task.jsonl`, 2026-11-24]**:
 
 ```text
-agy -p --output-format stream-json --input-format stream-json
-  --model <lane.model> --mode accept-edits --sandbox
-  --print-timeout 30m
+agy -p <prompt> --dangerously-skip-permissions --sandbox
+  --output-format stream-json --model <lane.model> --print-timeout 30m
 ```
 
-- The prompt is one stdin line: `{"event":"user","message":{"content":"..."}}`
-  **[unobserved]**.
-- `env_set`: `AGY_CLI_DISABLE_AUTO_UPDATE=true` **[unobserved]**. `agy` updates
+- The prompt is an argument. A headless run cannot answer approval prompts,
+  so permissions are granted and `--sandbox` limits the terminal tool.
+- `env_set`: `AGY_CLI_DISABLE_AUTO_UPDATE=true`. `agy` updates
   itself in the background on ordinary invocations **[observed: a 1.4.7 binary
   replaced itself with 1.5.14 after one `agy models` call]**, and the version
   must not change during a run.
-- `parse` **[unobserved]**: events are `init`, `step_update` (text deltas and
-  tool steps) and `result`.
-- `outcome` **[unobserved]**: `Done` when the exit code is 0, the last event
-  is `result` with status `SUCCESS`, there is no `finished_reason` and
-  `denied_actions` is empty. `Quota` when stderr has a line starting with
-  `AGY_ERROR:` whose JSON has status `RESOURCE_EXHAUSTED` or code 429; the
-  reset time is parsed from "Resets in 1h2m3s" when present. Everything else:
+- `parse` **[observed]**: each line is named by `event`: `init`,
+  `step_update`, `result`. A tool step arrives as `ACTIVE` and again as
+  `DONE`; onerig shows it once, when done, with its target from
+  `parameters.Path` (file tools) or `parameters.CommandLine` (terminal).
+- `outcome`: `Done` when the exit code is 0, the last `result` event has
+  status `SUCCESS` **[observed]**, there is no `finished_reason` and
+  `denied_actions` is empty **[unobserved]**. `Quota` or `Auth` when stderr
+  has a line starting with `AGY_ERROR:` whose JSON has status
+  `RESOURCE_EXHAUSTED` or code 429, or `UNAUTHENTICATED` or
+  `PERMISSION_DENIED` **[unobserved]**; otherwise the error text is
+  classified by the same signs as the other adapters. Everything else:
   `Unknown`.
 - Probe: `agy --version` must be at least 1.5.10, else `Unsupported`.
 - Quota report **[observed on 1.4.7 and 1.5.14; fixture `agy/usage.json`]**: `agy -p /usage --output-format json`
@@ -1009,7 +1010,7 @@ stays on the terminal. A quota bar for lanes that report quota is left for
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Done 2026-11-24: fixture tests pass; on a toy repository Claude planned through onerig, a person did the task in the manual lane, and Claude's review approved it into one commit. | yes |
 | 3 | Codex adapter with DeepSeek. | Done 2026-11-24: on a toy repository Claude planned, DeepSeek did the task through Codex, Claude approved, and the run ended as one commit in 39 s. | yes |
-| 4 | `agy` `direct` mode: probe, quota report, run. | Built 2026-11-24: probe and quota report observed (`doctor` shows the Gemini quota), a low report and a quota failure move the task on (tests). Open: one real `agy` task, to capture its event stream. | yes |
+| 4 | `agy` `direct` mode: probe, quota report, run. | Done 2026-11-24: probe and quota report observed (`doctor` shows the Gemini quota), a low report and a quota failure move the task on (tests); on a toy repository Claude planned, `agy` did the task in direct mode, Claude approved, and the run ended as one commit in 61 s. | yes |
 | 5 | Terminal UI and `doctor`. | Done 2026-11-24: the screen shows a scripted run in a real pseudo-terminal and leaves the final line behind; `doctor` prints one line per lane and exits 1 when a probed lane is not ready. | no |
 
 Step 1 does not wait for step 0. If the owner declines the live calls, step 0

@@ -11,8 +11,7 @@ API key.
 > **Status: early.** The whole loop (plan, work, review, commit, pause,
 > resume) runs end to end with real harnesses: Claude Code plans and reviews,
 > DeepSeek works through Codex, and `agy` works as a manual lane or, opt-in,
-> driven directly (see the warning below). Not published to any package
-> registry yet.
+> driven directly (see the warning below).
 
 ## How a run works
 
@@ -86,6 +85,16 @@ orchestrator on a consumer (Google AI Pro) sign-in as a breach that can lead to
 account suspension. `mode = "direct"` does exactly that, so it is off by
 default and needs `accept_vendor_terms_risk = true` on the lane. Use it only if
 you accept that risk for your own account.
+
+## Install
+
+```text
+cargo install onerig
+```
+
+onerig needs git and the harness CLIs your lanes use (`claude`, `codex`,
+`agy`), each already signed in. It reads `$XDG_CONFIG_HOME/onerig/config.toml`
+(or `--config <file>`); when there is none, it prints an example to start from.
 
 ## Commands
 
