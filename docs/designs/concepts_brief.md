@@ -102,7 +102,6 @@ From documentation and other projects' source, not yet observed here:
 - Event shapes of `claude -p --output-format stream-json`, `agy -p` stream-json
   and `dsh --json`.
 - What each harness prints when a quota is exhausted.
-- `copass relay --stdout --no-copy --from <agent> --session <id> --dir <dir>`.
 
 The first real run of each harness must be captured and kept as a test fixture.
 
@@ -125,7 +124,9 @@ The first real run of each harness must be captured and kept as a test fixture.
    the chain; nothing retries without a limit.
 5. **Fail-over carries the task.** The next worker gets a hand-over: the task
    spec, acceptance criteria, the git diff so far and the tail of the previous
-   output. copass is an optional richer provider, detected at run time.
+   output. It is always written to a file, so a person can give it to any
+   agent. onerig never calls copass; copass can list and hand over an onerig
+   run through an adapter in its own repository.
 6. **One git worktree per run.** Tasks run one after another in it, and each
    approved task becomes one commit. Workers write only there. The reviewer
    reads the diff and has no write tools.
