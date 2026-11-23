@@ -19,10 +19,10 @@ passes or a budget ends. When a worker's quota is exhausted, the next worker in
 a configured order continues the same task.
 
 onerig never calls a model API. It starts the harness CLIs the user already
-has (`claude`, `agy`, `dsh`) as subprocesses and reads their output.
+has (`claude`, `agy`, `codex`) as subprocesses and reads their output.
 
-In the default configuration the only automatic worker is DeepSeek Harness
-(`dsh`). Antigravity (`agy`) is a manual lane by default: onerig writes a
+In the default configuration the only automatic worker is DeepSeek, driven
+through Codex (`codex`). Antigravity (`agy`) is a manual lane by default: onerig writes a
 hand-over note, pauses, and the human runs `agy`. Letting onerig start `agy`
 itself is an opt-in mode.
 
@@ -46,7 +46,7 @@ a check command run by onerig, Windows support, a GUI, a daemon.
 
 | Term | Meaning |
 |------|---------|
-| Harness | An external coding-agent CLI: `claude`, `agy` or `dsh`. |
+| Harness | An external coding-agent CLI: `claude`, `agy` or `codex`. |
 | Adapter | onerig's module for one harness: it builds the command line and reads the output. |
 | Run | One goal, from `onerig run` through any number of `onerig resume` calls. Has an id, a branch and a worktree. |
 | Task | One unit of the plan: a title, instructions and acceptance criteria. |
@@ -77,7 +77,7 @@ crates/
         mod.rs        Adapter trait and its data types
         claude.rs
         agy.rs
-        dsh.rs
+        codex.rs
       process.rs      subprocess driver (spawn, stream, watchdog, kill)
       fake.rs         scripted Runner for tests
       worktree.rs     git worktree, diff and commit operations
@@ -238,7 +238,7 @@ So a task stays on its lane across revise rounds, a manual lane included:
 after a `revise` verdict on a manual round the run pauses with reason
 `handover` again. A manual lane is first chosen for a task only when no
 automatic lane anywhere in the chain is available, and the chain order serves
-both `agy` modes: with `worker = ["gemini", "deepseek"]`, `dsh` does the work
+both `agy` modes: with `worker = ["gemini", "deepseek"]`, `codex` does the work
 while `agy` is manual, and `agy` goes first once it is set to `direct`.
 
 The Unknown streak returns to 0 when the lane changes, when a job ends any
@@ -602,33 +602,46 @@ agy -p --output-format stream-json --input-format stream-json
   is the lowest `remaining_fraction` among that group's buckets and, when it
   is below `policy.min_remaining`, the latest `reset_time` of the low buckets.
 
-### 9.3 DeepSeek Harness (`dsh`) — worker
+### 9.3 Codex (`codex`) with DeepSeek — worker
 
-Call **[flags observed in `--help` of 0.2.2-rc.5; behaviour unobserved]**:
+DeepSeek is reached through OpenAI's Codex CLI pointed at DeepSeek's
+Responses API, which DeepSeek documents for Codex 0.164 and later. The owner
+has Codex 0.171.0 installed. The same adapter can later drive GPT through the
+user's own Codex login, by configuration only.
+
+Call **[flags observed in `codex exec --help` of 0.171.0; behaviour unobserved]**:
 
 ```text
-dsh --profile headless --json
-  --patch <run dir>/dsh-overlay.yml
-  --permission-mode workspace-write --approval-policy never
+codex exec --json --skip-git-repo-check --sandbox workspace-write
+  --model <lane.model>
   -
 ```
 
 - The prompt is written to stdin (`-`). The working directory is the worktree.
-- `files`: `dsh-overlay.yml`, a settings overlay that applies to this call
-  only. It turns off `session-log-deepseek` (upload of session logs to the
-  vendor) and sets `agent-default-model` to the lane's model. Both ids exist
-  in the installed version **[observed with `--dump-config`]**; that the
-  overlay is accepted is **[unobserved]**.
-- `env_set`: `DSH_TELEMETRY_MODE=DISABLED`.
-- `dsh` reads its API key the way it does for the user: from
-  `DEEPSEEK_API_KEY` in the environment, or from its own profile.
-- `parse` and `outcome` **[unobserved]**: newline-delimited JSON run events;
-  field names come from the first captured run. An empty balance or a
-  provider refusal is `Quota` with no reset time; a missing key is `Auth`;
-  everything else `Unknown`.
-- Probe: `dsh --version`, and `dsh --profile headless --help` must mention
-  `--json` and `--approval-policy`, else `Unsupported`.
+- `env_set`: `CODEX_HOME=<data home>/onerig/codex/<lane>`. onerig writes two
+  files there through `Spawn.files`, so the user's own `~/.codex` (and its
+  ChatGPT login) is never read or changed, and DeepSeek's one-click setup
+  script, which rewrites `~/.codex/config.toml`, is never run:
+  - `config.toml`: `model`, `model_provider = "deepseek"`,
+    `model_catalog_json` pointing at the file below, and a
+    `[model_providers.deepseek]` table with `base_url =
+    "https://api.deepseek.com/"`, `wire_api = "responses"` and
+    `env_key = "DEEPSEEK_API_KEY"`.
+  - `models.json`: the model catalog DeepSeek publishes for Codex.
+  All four keys exist in the installed binary **[observed in its strings]**.
+  Codex reads the key from `DEEPSEEK_API_KEY` itself; onerig never sees it.
+- `deepseek-flash` accepts image input according to DeepSeek's Codex page;
+  the first release sends text only.
+- `parse` and `outcome` **[unobserved]**: newline-delimited JSON events
+  (thread, turn and item events). A usage-limit or insufficient-balance error
+  is `Quota` with no reset time; an unauthorised error is `Auth`; everything
+  else `Unknown`. Field names come from the first captured run.
+- Probe: `codex --version` must be at least 0.164, and `codex exec --help`
+  must mention `--json`, else `Unsupported`. A probe also fails when
+  `DEEPSEEK_API_KEY` is not set, without reading its value.
 - Quota report: none.
+- copass already reads Codex sessions and honours `CODEX_HOME`, so a run's
+  Codex attempts can be handed over by hand with copass as well.
 
 ## 10. Git and worktrees
 
@@ -703,7 +716,7 @@ model = "sonnet"
 effort = "low"
 
 [lanes.deepseek]
-harness = "dsh"
+harness = "codex"
 model = "deepseek-flash"
 
 [lanes.gemini]
@@ -720,10 +733,10 @@ quota_group = "Gemini Models"
 | `run.idle_timeout`, `run.job_timeout` | integer followed by `s`, `m` or `h` | `5m`, `30m` | — |
 | `policy.min_remaining` | number 0–1 | 0.05 | — |
 | `roles.planner`, `roles.reviewer` | list of exactly one lane name | required | lanes with harness `claude` |
-| `roles.worker` | list of one or more distinct lane names | required | lanes with harness `dsh` or `agy` |
-| `lanes.<name>.harness` | `claude`, `agy`, `dsh`, `fake` | required | all |
+| `roles.worker` | list of one or more distinct lane names | required | lanes with harness `codex` or `agy` |
+| `lanes.<name>.harness` | `claude`, `agy`, `codex`, `fake` | required | all |
 | `lanes.<name>.bin` | string | the harness name | all |
-| `lanes.<name>.model` | string | required | `claude`, `agy`, `dsh` |
+| `lanes.<name>.model` | string | required | `claude`, `agy`, `codex` |
 | `lanes.<name>.script` | path | required | `fake` |
 | `lanes.<name>.effort` | `low`, `medium`, `high` | `medium` | `claude` |
 | `lanes.<name>.mode` | `off`, `handover`, `direct` | `handover` | `agy` |
@@ -750,7 +763,6 @@ serve any role and is accepted only when the environment variable
   handover-<task index>-<attempt>.md   every worker attempt, and every pause
                                        whose next step is a worker attempt
   raw-<job number>.log       raw output, only for failed jobs
-  dsh-overlay.yml
 
 <worktree>/.onerig/handover.md   a copy of the newest hand-over; removed when
                                  the task is approved
@@ -878,14 +890,14 @@ One screen, fed by the same records as `--plain`:
 
 ```text
 + onerig  run 20261123-201500-a1f3   goal: add retry to the HTTP client -----+
-| Tasks                      | t2  attempt 1  lane: deepseek (dsh)            |
+| Tasks                      | t2  attempt 1  lane: deepseek (codex)          |
 |  ok  t1 Add retry helper   | > read src/http.rs                             |
 |  >>  t2 Wire into client   | > edit src/http.rs                             |
 |  ..  t3 Update docs        | Applied the retry helper to send() ...         |
 |----------------------------|                                                |
 | Lanes                      |                                                |
 |  plan     claude  ok       |                                                |
-|  deepseek dsh     ok       |                                                |
+|  deepseek codex   ok       |                                                |
 |  gemini   agy     manual   |                                                |
 + q quit (the run can be resumed) -------------------------------------------+
 ```
@@ -934,7 +946,7 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 
   ```json
   {
-    "preflight": { "deepseek": { "error": { "type": "missing", "message": "dsh not found" } } },
+    "preflight": { "deepseek": { "error": { "type": "missing", "message": "codex not found" } } },
     "quota": { "gemini": { "remaining_fraction": 0.5, "reset_at": null } },
     "steps": [
       { "lane": "plan", "outcome": { "type": "done", "text": "", "structured": { "tasks": [] } } },
@@ -966,11 +978,11 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 
 | Step | Content | Done when | Live harness |
 |------|---------|-----------|--------------|
-| 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one `dsh` task (stdout, stderr, exit code). | The three captures are in `tests/fixtures/` and sections 9.1 and 9.3 are corrected to match them. | yes, three small calls; needs the owner's go-ahead |
+| 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one Codex task on DeepSeek (stdout, stderr, exit code). | The three captures are in `tests/fixtures/` and sections 9.1 and 9.3 are corrected to match them. | yes, three small calls; needs the owner's go-ahead |
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Fixture tests pass; a real plan and a real review complete on a toy repository. | yes |
-| 3 | `dsh` adapter. | A real task ends as one commit after an approved review. From here the tool does useful work. | yes |
-| 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to `dsh`. | yes |
+| 3 | Codex adapter with DeepSeek. | A real task ends as one commit after an approved review. From here the tool does useful work. | yes |
+| 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to Codex. | yes |
 | 5 | Terminal UI and `doctor`. | The screen in section 14 shows a fake run; `doctor` prints one line per lane. | no |
 
 Step 1 does not wait for step 0. If the owner declines the live calls, step 0
@@ -981,9 +993,10 @@ is folded into steps 2 and 3.
 - A check command run by onerig between worker and reviewer. It needs a
   decision on sandboxing, because it executes code a worker wrote.
 - Resuming a harness's own conversation instead of starting fresh.
-- A second DeepSeek route: Claude Code against DeepSeek's Anthropic-compatible
-  endpoint, reusing the Claude adapter with a separate configuration
-  directory.
+- Other DeepSeek routes: DeepSeek Harness (`dsh --profile headless`), or
+  Claude Code against DeepSeek's Anthropic-compatible endpoint.
+- A `provider` key for `codex` lanes, to use GPT through the user's own Codex
+  login.
 - API-key authentication for `agy`.
 - A separate "rate limited, wait and retry" failure kind, once a fixture shows
   a harness reports it apart from quota.
@@ -1025,13 +1038,13 @@ How the cases work:
 
 | Case | What happens |
 |------|--------------|
-| `agy` in `direct` mode runs out of quota and `dsh` continues | onerig alone: it already holds `agy`'s output and the diff, and writes the hand-over itself. |
+| `agy` in `direct` mode runs out of quota and Codex continues | onerig alone: it already holds `agy`'s output and the diff, and writes the hand-over itself. |
 | `agy` by hand, then a second round after a `revise` | onerig writes the hand-over files and prints the three lines of section 9.2; the second round happens in the same `agy` conversation. |
-| A paused run is continued by hand in another agent | Without copass: open the agent in the worktree and tell it to read `.onerig/handover.md`. With copass today, when a person already worked in `agy` in that worktree: `copass --from antigravity --to codex` hands over that conversation, whose first message points at onerig's note. With the adapter: `copass --from onerig --to codex` also works when only `dsh` has worked on the run. |
+| A paused run is continued by hand in another agent | Without copass: open the agent in the worktree and tell it to read `.onerig/handover.md`. With copass today, when a person already worked in `agy` in that worktree: `copass --from antigravity --to codex` hands over that conversation, whose first message points at onerig's note. With the adapter: `copass --from onerig --to codex` also works when only onerig's own hand-over exists. |
 
 Not built: onerig calling `copass relay` to enrich a hand-over with the
-previous agent's session log. Among onerig's workers copass can read only
-`agy`, where onerig already holds the output; it would depend on `agy`'s
+previous agent's session log. onerig already holds every worker's output and
+the diff; it would depend on `agy`'s
 on-disk format through copass; and it would forward what a person typed into
 `agy` to another vendor.
 
@@ -1039,8 +1052,8 @@ on-disk format through copass; and it would forward what a person typed into
 
 1. Does `--safe-mode` work with a subscription login in print mode, and how
    many tokens does a minimal planner call cost with and without it?
-2. Does `dsh` accept the generated overlay, and where does it find its key on
-   a machine where `DEEPSEEK_API_KEY` is not set?
+2. Does `codex exec --json` work against DeepSeek's Responses API with the
+   generated `CODEX_HOME`, and what do its events look like?
 3. What does each harness print on quota exhaustion? No fixture exists yet
    for any of the three.
 4. Licence: MIT is assumed, matching copass.

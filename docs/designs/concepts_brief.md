@@ -30,7 +30,7 @@ through a model API, so every model runs in the harness it works best in.
 | Interface | TUI first. A GUI may come later, so the core must be a library. |
 | Distribution | Open source. |
 | Antigravity | Driving `agy` directly is **optional and off by default**; the owner turns it on for their own account and accepts the risk (see Risks). The default is hand-over mode: onerig writes a hand-over note and the human runs `agy`. API-key auth for `agy` comes later. |
-| DeepSeek | API key only. |
+| DeepSeek | API key only, through Codex (`codex exec`) pointed at DeepSeek's Responses API; the same adapter can drive GPT later. DeepSeek Harness (`dsh`) is a later option. |
 | copass | The two projects stay independent. Each works without the other. |
 | Git | Work on `main`, commit as we go. No push and no public repository until the owner says so. |
 
