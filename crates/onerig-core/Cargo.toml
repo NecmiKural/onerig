@@ -3,6 +3,9 @@ name = "onerig-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Core library of onerig: run state machine, lane policy and harness adapters."
 
 [lints]
