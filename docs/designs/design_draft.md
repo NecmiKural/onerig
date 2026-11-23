@@ -507,7 +507,7 @@ name on PATH).
 
 ### 9.1 Claude Code — planner and reviewer
 
-Call **[flags observed in `--help` of 2.1.330; behaviour unobserved]**:
+Call **[observed: captured in `tests/fixtures/claude/`, 2026-11-24]**:
 
 ```text
 claude -p --safe-mode
@@ -522,10 +522,9 @@ claude -p --safe-mode
 ```
 
 - The prompt is written to stdin. The working directory is the worktree.
-- `--safe-mode` keeps the user's plugins, hooks and MCP servers out of every
-  call. If it cannot be combined with a subscription login in print mode, the
-  fallback is `--setting-sources` with an empty list plus
-  `--strict-mcp-config`.
+- `--safe-mode` works with a subscription login in print mode **[observed:
+  `apiKeySource: "none"`, MCP servers empty]**. The `init` event still lists
+  the user's plugins, so whether their hooks run is not yet known.
 - `env_remove`: `CLAUDECODE`, `AI_AGENT`, `CLAUDE_CODE_ENTRYPOINT` and
   `ANTHROPIC_*`, so that a run started from inside a Claude Code session, or
   from a shell with a custom endpoint, still uses the user's own login.
@@ -539,7 +538,10 @@ claude -p --safe-mode
   with the reported reset time. `Auth`: a "not logged in" result. Everything
   else: `Unknown`.
 - Probe: `claude --version` and `claude auth status`. No model call.
-- Quota report: none. Exhaustion is seen only after a call.
+- Quota report: no free command, but every call, successful or not, emits a
+  `rate_limit_event` with `utilization` and `resetsAt` (unix seconds) for the
+  five-hour and seven-day windows **[observed]**. The adapter turns it into a
+  `QuotaReport` for the run log; a `rejected` status is `Quota`.
 
 Claude Code's documentation says `--bare` will become the default for print
 mode, and bare mode cannot use a subscription login. If an update does that,
@@ -610,7 +612,7 @@ Responses API, which DeepSeek documents for Codex 0.164 and later. The owner
 has Codex 0.171.0 installed. The same adapter can later drive GPT through the
 user's own Codex login, by configuration only.
 
-Call **[flags observed in `codex exec --help` of 0.171.0; behaviour unobserved]**:
+Call **[observed: captured in `tests/fixtures/codex/`, 2026-11-24]**:
 
 ```text
 codex exec --json --skip-git-repo-check --sandbox workspace-write
@@ -633,8 +635,12 @@ codex exec --json --skip-git-repo-check --sandbox workspace-write
   Codex reads the key from `DEEPSEEK_API_KEY` itself; onerig never sees it.
 - `deepseek-flash` accepts image input according to DeepSeek's Codex page;
   the first release sends text only.
-- `parse` and `outcome` **[unobserved]**: newline-delimited JSON events
-  (thread, turn and item events). A usage-limit or insufficient-balance error
+- `parse` and `outcome` **[observed for success]**: `thread.started`,
+  `turn.started`, `item.started` / `item.completed` (types `agent_message`,
+  `command_execution`, `file_change`, `error`) and `turn.completed` with
+  token usage. An `item.completed` of type `error` is a warning, not a
+  failure: without a model catalog Codex reports missing model metadata this
+  way and carries on, so onerig always writes `models.json`. A usage-limit or insufficient-balance error
   is `Quota` with no reset time; an unauthorised error is `Auth`; everything
   else `Unknown`. Field names come from the first captured run.
 - Probe: `codex --version` must be at least 0.164, and `codex exec --help`
@@ -979,7 +985,7 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 
 | Step | Content | Done when | Live harness |
 |------|---------|-----------|--------------|
-| 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one Codex task on DeepSeek (stdout, stderr, exit code). | The three captures are in `tests/fixtures/` and sections 9.1 and 9.3 are corrected to match them. | yes, three small calls; needs the owner's go-ahead |
+| 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one Codex task on DeepSeek (stdout, stderr, exit code). | Done 2026-11-24: the captures are in `crates/onerig-core/tests/fixtures/`. | yes, three small calls |
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Fixture tests pass; a real plan and a real review complete on a toy repository. | yes |
 | 3 | Codex adapter with DeepSeek. | A real task ends as one commit after an approved review. From here the tool does useful work. | yes |
@@ -1051,14 +1057,12 @@ on-disk format through copass; and it would forward what a person typed into
 
 ## 20. Open questions
 
-1. Does `--safe-mode` work with a subscription login in print mode, and how
-   many tokens does a minimal planner call cost with and without it?
-2. Does `codex exec --json` work against DeepSeek's Responses API with the
-   generated `CODEX_HOME`, and what do its events look like?
-3. What does each harness print on quota exhaustion? No fixture exists yet
-   for any of the three.
-4. Licence: MIT is assumed, matching copass.
-5. Does `agy`, started by hand in a run's worktree, read
+1. Do the user's plugin hooks run under `--safe-mode`? The planner call cost
+   about 17 000 input tokens, mostly cached.
+2. What do Claude and Codex print when a quota is exhausted? Successful runs
+   are captured; failures are not.
+3. Licence: MIT is assumed, matching copass.
+4. Does `agy`, started by hand in a run's worktree, read
    `.onerig/handover.md` (a git-ignored file), and does it record the
    conversation with the worktree as its workspace? One check by the owner
    answers both.
