@@ -669,3 +669,24 @@ fn resume_of_a_paused_run_returns_to_the_stored_phase() {
     assert_eq!(state.phase, Phase::Reviewing);
     assert_eq!(state.paused, None);
 }
+
+#[test]
+fn a_lane_whose_quota_report_is_too_low_is_passed_over_and_the_report_is_logged() {
+    let f = fixture(
+        r#"["w1", "w2"]"#,
+        5,
+        vec![plan(1), work("w2", "a.txt"), approve()],
+    );
+    let mut script: Value =
+        serde_json::from_str(&std::fs::read_to_string(&f.script).unwrap()).unwrap();
+    script["quota"] = json!({ "w1": { "remaining_fraction": 0.01, "reset_at": NOW + 3_600_000 } });
+    std::fs::write(&f.script, script.to_string()).unwrap();
+
+    let (result, records) = f.go(Call::Start, &f.main);
+
+    assert_eq!(result.unwrap().exit, Exit::Done);
+    assert!(records.iter().any(|r| matches!(&r.entry,
+        LogEntry::Policy(PolicyEvent::Quota { lane, remaining_fraction, .. }) if lane == "w1" && *remaining_fraction < 0.05)));
+    assert!(records.iter().any(|r| matches!(&r.entry,
+        LogEntry::Policy(PolicyEvent::LaneExhausted { lane, until }) if lane == "w1" && *until == Some(NOW + 3_600_000))));
+}

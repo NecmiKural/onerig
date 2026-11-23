@@ -117,9 +117,16 @@ impl Screen {
 
     fn apply_policy(&mut self, event: &PolicyEvent, record: &LogRecord) {
         let (lane, status) = match event {
-            PolicyEvent::Probe { lane, ok, .. } => (lane, if *ok { "ok" } else { "failed" }),
-            PolicyEvent::LaneExhausted { lane, .. } => (lane, "exhausted"),
-            PolicyEvent::LaneSkipped { lane } => (lane, "skipped"),
+            PolicyEvent::Probe { lane, ok, .. } => {
+                (lane, if *ok { "ok" } else { "failed" }.to_string())
+            }
+            PolicyEvent::LaneExhausted { lane, .. } => (lane, "exhausted".to_string()),
+            PolicyEvent::LaneSkipped { lane } => (lane, "skipped".to_string()),
+            PolicyEvent::Quota {
+                lane,
+                remaining_fraction,
+                ..
+            } => (lane, plain::percent_left(*remaining_fraction)),
             PolicyEvent::LaneSelected { lane, .. } => {
                 self.lane = Some(lane.clone());
                 self.attempt = record.attempt;
@@ -128,7 +135,7 @@ impl Screen {
             PolicyEvent::Handover { .. } => return,
         };
         if let Some(row) = self.lanes.iter_mut().find(|row| &row.name == lane) {
-            row.status = status.to_string();
+            row.status = status;
         }
     }
 
@@ -471,8 +478,20 @@ model = "m"
             }),
         ));
 
+        records.push(record(
+            Some(2),
+            None,
+            None,
+            LogEntry::Policy(PolicyEvent::Quota {
+                lane: "gemini".into(),
+                remaining_fraction: 0.94,
+                reset_at: None,
+            }),
+        ));
+
         let screen = screen_after(&records);
 
+        assert_eq!(screen.lanes[2].status, "94% left");
         assert_eq!(screen.lanes[1].status, "exhausted");
         assert_eq!(screen.lanes[0].status, "skipped");
     }

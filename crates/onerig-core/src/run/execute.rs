@@ -73,6 +73,18 @@ impl Machine<'_> {
                 )
             })
             .collect();
+        for (lane, report) in infos.iter().filter_map(|i| Some((&i.0, i.5?))) {
+            self.log.record(
+                self.state.task_index,
+                None,
+                None,
+                LogEntry::Policy(PolicyEvent::Quota {
+                    lane: lane.clone(),
+                    remaining_fraction: report.remaining_fraction,
+                    reset_at: report.reset_at,
+                }),
+            );
+        }
         let views: Vec<LaneView<'_>> = infos
             .iter()
             .map(|(name, off, manual, probe, mark, quota)| LaneView {

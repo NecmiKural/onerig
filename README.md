@@ -10,8 +10,9 @@ API key.
 
 > **Status: early.** The whole loop (plan, work, review, commit, pause,
 > resume) runs end to end with real harnesses: Claude Code plans and reviews,
-> DeepSeek works through Codex, and `agy` works as a manual lane. Driving `agy`
-> directly is not built yet. Not published to any package registry yet.
+> DeepSeek works through Codex, and `agy` works as a manual lane or, opt-in,
+> driven directly (see the warning below). Not published to any package
+> registry yet.
 
 ## How a run works
 

@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, bail};
 use onerig_core::adapter::Adapter;
+use onerig_core::adapter::agy::Agy;
 use onerig_core::adapter::claude::Claude;
 use onerig_core::adapter::codex::Codex;
 use onerig_core::config::{Config, HarnessKind, Lane};
@@ -109,10 +110,23 @@ fn adapter_for(name: &str, lane: &Lane, data_home: &Path) -> anyhow::Result<Box<
     match lane.harness {
         HarnessKind::Claude => Ok(Box::new(Claude::new(lane))),
         HarnessKind::Codex => Ok(Box::new(Codex::new(name, lane, data_home))),
-        HarnessKind::Agy | HarnessKind::Fake => bail!(
-            "lane {name}: onerig cannot drive agy itself yet; use mode = \"handover\" for now"
-        ),
+        HarnessKind::Agy => Ok(Box::new(Agy::new(lane))),
+        HarnessKind::Fake => bail!("lane {name}: a scripted lane has no harness adapter"),
     }
+}
+
+/// The warning section 15 of the design asks for whenever onerig itself will
+/// drive `agy`.
+pub fn vendor_terms_warning(config: &Config) -> Option<String> {
+    let first = lanes_in_roles(config).into_iter().find(|name| {
+        let lane = &config.lanes[*name];
+        lane.harness == HarnessKind::Agy && !lane.is_off() && !lane.is_manual()
+    })?;
+    Some(format!(
+        "onerig: warning: lane {first} drives agy directly. Google's Antigravity terms and FAQ \
+         treat driving agy from another agent on a consumer sign-in as a breach that can lead to \
+         account suspension; you enabled it at your own risk."
+    ))
 }
 
 impl Runner for Lanes {
@@ -180,21 +194,20 @@ mod tests {
     }
 
     #[test]
-    fn a_direct_agy_lane_is_refused_until_its_adapter_exists() {
+    fn a_direct_agy_lane_gets_its_adapter_and_a_warning() {
         let script = script();
         let direct = "mode = \"direct\"\nquota_group = \"G\"\naccept_vendor_terms_risk = true\n";
         let config = config_with("\"gemini\"", direct, script.path());
+        let manual = config_with("\"gemini\"", "", script.path());
         let stop = Arc::new(AtomicBool::new(false));
 
-        let error = Lanes::build(&config, &stop, Path::new("."), Path::new("/data"))
-            .err()
-            .unwrap();
-
+        assert!(Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).is_ok());
         assert!(
-            error
-                .to_string()
-                .starts_with("lane gemini: onerig cannot drive agy itself yet")
+            vendor_terms_warning(&config)
+                .unwrap()
+                .contains("lane gemini drives agy directly")
         );
+        assert_eq!(vendor_terms_warning(&manual), None);
     }
 
     #[test]

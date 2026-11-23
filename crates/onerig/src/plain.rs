@@ -57,6 +57,11 @@ fn policy_line(record: &LogRecord, event: &PolicyEvent) -> String {
             format!("{lane}  exhausted until {until}")
         }
         PolicyEvent::LaneSkipped { lane } => format!("{lane}  skipped for this task"),
+        PolicyEvent::Quota {
+            lane,
+            remaining_fraction,
+            ..
+        } => format!("{lane}  quota {}", percent_left(*remaining_fraction)),
         PolicyEvent::Handover { path } => {
             format!("{}  hand-over {}", who(record), path.display())
         }
@@ -84,6 +89,10 @@ fn outcome_text(outcome: &Outcome) -> String {
         Outcome::Done { .. } => "done".to_string(),
         Outcome::Failed { kind, message, .. } => format!("failed {}: {message}", word(kind)),
     }
+}
+
+pub fn percent_left(fraction: f64) -> String {
+    format!("{:.0}% left", fraction * 100.0)
 }
 
 /// `t<task> a<attempt> <lane>`, leaving out what the record does not have.
@@ -312,6 +321,17 @@ mod tests {
             line(&exhausted).unwrap(),
             "20:15:01 deepseek  exhausted until resume"
         );
+        let quota = record(
+            None,
+            None,
+            None,
+            LogEntry::Policy(PolicyEvent::Quota {
+                lane: "gemini".into(),
+                remaining_fraction: 0.077,
+                reset_at: None,
+            }),
+        );
+        assert_eq!(line(&quota).unwrap(), "20:15:01 gemini  quota 8% left");
         assert_eq!(
             line(&probe).unwrap(),
             "20:15:01 probe plan  failed: not logged in"

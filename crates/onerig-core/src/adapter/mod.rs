@@ -40,5 +40,6 @@ pub trait Adapter {
     fn outcome(&self, job: &Job, output: &Output) -> Outcome;
 }
 
+pub mod agy;
 pub mod claude;
 pub mod codex;

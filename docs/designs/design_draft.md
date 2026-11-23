@@ -1,9 +1,11 @@
 # onerig — design draft
 
 Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 3
-and 5 are done: a real run plans with Claude Code, works with DeepSeek through
-Codex, reviews with Claude Code and commits, shown in the terminal UI; `onerig
-doctor` checks the lanes. Left: `agy` direct mode (step 4). Drafts 2 and 3 resolve the findings of two rounds of independent
+and 5 are done, and step 4 is built: a real run plans with Claude Code, works
+with DeepSeek through Codex (or `agy` in direct mode), reviews with Claude Code
+and commits, shown in the terminal UI; `onerig doctor` checks the lanes. Left:
+one live `agy` direct task to capture its event stream, which needs the
+owner's go-ahead because of the vendor terms. Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
@@ -599,12 +601,16 @@ agy -p --output-format stream-json --input-format stream-json
   reset time is parsed from "Resets in 1h2m3s" when present. Everything else:
   `Unknown`.
 - Probe: `agy --version` must be at least 1.5.10, else `Unsupported`.
-- Quota report **[observed on 1.4.7]**: `agy -p /usage --output-format json`
+- Quota report **[observed on 1.4.7 and 1.5.14; fixture `agy/usage.json`]**: `agy -p /usage --output-format json`
   returns `num_turns: 0`, zero tokens, and `command.data.groups[].buckets[]`
   with `remaining_fraction` and `reset_time`. The lane's `quota_group` must
-  equal a group's name exactly; an unknown group fails the probe. The report
-  is the lowest `remaining_fraction` among that group's buckets and, when it
-  is below `policy.min_remaining`, the latest `reset_time` of the low buckets.
+  equal a group's name exactly; an unknown group reports nothing. The report
+  is the lowest `remaining_fraction` among that group's buckets with that
+  bucket's `reset_time`; an unused bucket reports the epoch, which counts as
+  no reset time. Every report is written to the log, and the terminal UI shows
+  it in the Lanes panel.
+- Probe **[observed]**: `agy --version` and `agy models`, which needs the
+  sign-in and spends no quota; the lane's model must be in the list.
 
 ### 9.3 Codex (`codex`) with DeepSeek — worker
 
@@ -1003,7 +1009,7 @@ stays on the terminal. A quota bar for lanes that report quota is left for
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Done 2026-11-24: fixture tests pass; on a toy repository Claude planned through onerig, a person did the task in the manual lane, and Claude's review approved it into one commit. | yes |
 | 3 | Codex adapter with DeepSeek. | Done 2026-11-24: on a toy repository Claude planned, DeepSeek did the task through Codex, Claude approved, and the run ended as one commit in 39 s. | yes |
-| 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to Codex. | yes |
+| 4 | `agy` `direct` mode: probe, quota report, run. | Built 2026-11-24: probe and quota report observed (`doctor` shows the Gemini quota), a low report and a quota failure move the task on (tests). Open: one real `agy` task, to capture its event stream. | yes |
 | 5 | Terminal UI and `doctor`. | Done 2026-11-24: the screen shows a scripted run in a real pseudo-terminal and leaves the final line behind; `doctor` prints one line per lane and exits 1 when a probed lane is not ready. | no |
 
 Step 1 does not wait for step 0. If the owner declines the live calls, step 0

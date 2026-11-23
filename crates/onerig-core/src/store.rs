@@ -169,9 +169,15 @@ pub enum StateEvent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PolicyEvent {
+    /// What a harness reported about its quota before a lane was chosen.
+    Quota {
+        lane: String,
+        remaining_fraction: f64,
+        reset_at: Option<u64>,
+    },
     Probe {
         lane: String,
         ok: bool,
@@ -216,6 +222,63 @@ pub fn format_time(now_ms: u64) -> String {
         seconds / 60 % 60,
         seconds % 60
     )
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` to unix milliseconds; `None` for any other form.
+pub fn parse_utc_ms(text: &str) -> Option<u64> {
+    let [year, month, day, hour, minute, second] = utc_fields(text)?;
+    let ranges = [
+        (month, 1, 12),
+        (day, 1, 31),
+        (hour, 0, 23),
+        (minute, 0, 59),
+        (second, 0, 59),
+    ];
+    if !ranges
+        .iter()
+        .all(|&(value, low, high)| (low..=high).contains(&value))
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day)?;
+    Some((days * 86_400 + hour * 3600 + minute * 60 + second) * 1000)
+}
+
+/// The six numbers of a timestamp in exactly the form `YYYY-MM-DDTHH:MM:SSZ`.
+fn utc_fields(text: &str) -> Option<[u64; 6]> {
+    let bytes = text.as_bytes();
+    let separators = [
+        (4, b'-'),
+        (7, b'-'),
+        (10, b'T'),
+        (13, b':'),
+        (16, b':'),
+        (19, b'Z'),
+    ];
+    if bytes.len() != 20 || separators.iter().any(|&(i, c)| bytes[i] != c) {
+        return None;
+    }
+    let spans = [(0, 4), (5, 7), (8, 10), (11, 13), (14, 16), (17, 19)];
+    let mut fields = [0u64; 6];
+    for (field, (from, to)) in fields.iter_mut().zip(spans) {
+        let digits = &text[from..to];
+        if !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        *field = digits.parse().ok()?;
+    }
+    Some(fields)
+}
+
+/// The inverse of `civil_from_days`, for dates from 1970 on.
+fn days_from_civil(year: u64, month: u64, day: u64) -> Option<u64> {
+    let year = year.checked_sub(u64::from(month <= 2))?;
+    let era = year / 400;
+    let year_of_era = year % 400;
+    let month_index = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    (era * 146_097 + day_of_era).checked_sub(719_468)
 }
 
 /// Days since 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's
@@ -883,5 +946,42 @@ mod tests {
 
         // The child shares this process's group, so no group has its pid as id.
         assert_eq!(results, [false, false, true, false]);
+    }
+
+    #[test]
+    fn utc_timestamps_parse_to_milliseconds_and_round_trip_with_the_run_id_date() {
+        assert_eq!(
+            parse_utc_ms("2026-11-23T20:15:00Z"),
+            Some(1_795_464_900_000)
+        );
+        assert_eq!(
+            parse_utc_ms("2024-02-29T12:34:56Z"),
+            Some(1_709_210_096_000)
+        );
+        assert_eq!(parse_utc_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            parse_utc_ms("2100-03-01T00:00:00Z"),
+            Some(4_107_542_400_000)
+        );
+        assert_eq!(
+            &run_id(parse_utc_ms("2026-01-01T00:00:00Z").unwrap(), 1)[..15],
+            "20260101-000000"
+        );
+    }
+
+    #[test]
+    fn other_timestamp_forms_are_refused() {
+        for text in [
+            "",
+            "2026-11-23 20:15:00Z",
+            "2026-11-23T20:15:00",
+            "2026-13-01T00:00:00Z",
+            "2026-11-23T24:00:00Z",
+            "2026-11-32T00:00:00Z",
+            "2026-1x-23T20:15:00Z",
+            "1969-12-31T23:59:59Z",
+        ] {
+            assert_eq!(parse_utc_ms(text), None, "{text}");
+        }
     }
 }

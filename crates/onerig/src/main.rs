@@ -129,6 +129,9 @@ fn run_session(
     if let Command::Run { .. } = session.command {
         warn_if_dirty(&Git::new(), session.cwd);
     }
+    if let Some(warning) = lanes::vendor_terms_warning(session.config) {
+        eprintln!("{warning}");
+    }
     if plain_wanted || !std::io::stdout().is_terminal() {
         execute(session, runner, &mut |record| {
             if let Some(line) = plain::line(record) {
