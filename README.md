@@ -9,10 +9,10 @@ itself, so every model runs in the harness built for it, on your own login or
 API key.
 
 > **Status: early.** The whole loop (plan, work, review, commit, pause,
-> resume) runs end to end. Claude Code already plans and reviews for real;
-> the Codex (DeepSeek) worker adapter is next, and until then a worker lane is
-> either a manual `agy` lane or a scripted test lane. Not published to any
-> package registry yet.
+> resume) runs end to end with real harnesses: Claude Code plans and reviews,
+> DeepSeek works through Codex, and `agy` works as a manual lane. Driving `agy`
+> directly, the terminal UI and `onerig doctor` are not built yet. Not
+> published to any package registry yet.
 
 ## How a run works
 

@@ -1,8 +1,9 @@
 # onerig — design draft
 
-Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 2
-are done: the whole loop runs end to end, with Claude Code as planner and
-reviewer; workers are scripted or manual until the Codex adapter (step 3). Drafts 2 and 3 resolve the findings of two rounds of independent
+Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build steps 0 to 3
+are done: a real run plans with Claude Code, works with DeepSeek through Codex,
+reviews with Claude Code and commits. Left: `agy` direct mode (step 4), the
+terminal UI and `onerig doctor` (step 5). Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
@@ -621,28 +622,31 @@ codex exec --json --skip-git-repo-check --sandbox workspace-write
 ```
 
 - The prompt is written to stdin (`-`). The working directory is the worktree.
-- `env_set`: `CODEX_HOME=<data home>/onerig/codex/<lane>`. onerig writes two
-  files there through `Spawn.files`, so the user's own `~/.codex` (and its
-  ChatGPT login) is never read or changed, and DeepSeek's one-click setup
-  script, which rewrites `~/.codex/config.toml`, is never run:
-  - `config.toml`: `model`, `model_provider = "deepseek"`,
-    `model_catalog_json` pointing at the file below, and a
-    `[model_providers.deepseek]` table with `base_url =
-    "https://api.deepseek.com/"`, `wire_api = "responses"` and
-    `env_key = "DEEPSEEK_API_KEY"`.
-  - `models.json`: the model catalog DeepSeek publishes for Codex.
-  All four keys exist in the installed binary **[observed in its strings]**.
+- `env_set`: `CODEX_HOME=<data home>/onerig/codex/<lane>`. onerig writes
+  `config.toml` there through `Spawn.files`, so the user's own `~/.codex` (and
+  its ChatGPT login) is never read or changed, and DeepSeek's one-click setup
+  script, which rewrites `~/.codex/config.toml`, is never run. The file sets
+  `model`, `model_provider = "deepseek"` and a `[model_providers.deepseek]`
+  table with `base_url = "https://api.deepseek.com/"`, `wire_api =
+  "responses"` and `env_key = "DEEPSEEK_API_KEY"`.
+  No model catalog is written: Codex requires every catalog entry to carry
+  its own long system prompt, and without a catalog it falls back to default
+  metadata and works **[observed]**, at the cost of one warning per run.
   Codex reads the key from `DEEPSEEK_API_KEY` itself; onerig never sees it.
-- `deepseek-flash` accepts image input on all three of DeepSeek's wire APIs,
-  and Codex sends images when the model catalog lists the `image` input
-  modality, so onerig's `models.json` does; `deepseek-v4-pro` is text only.
-  The first release sends text only (section 18).
+- `deepseek-flash` accepts image input on all three of DeepSeek's wire APIs;
+  Codex sends images only when a model catalog lists the `image` input
+  modality, which needs the catalog this release does not write;
+  `deepseek-v4-pro` is text only. The first release sends text only
+  (section 18).
 - `parse` and `outcome` **[observed for success]**: `thread.started`,
   `turn.started`, `item.started` / `item.completed` (types `agent_message`,
   `command_execution`, `file_change`, `error`) and `turn.completed` with
   token usage. An `item.completed` of type `error` is a warning, not a
   failure: without a model catalog Codex reports missing model metadata this
-  way and carries on, so onerig always writes `models.json`.
+  way and carries on. An HTTP error is retried five times, each shown as a
+  top-level `error` event starting with `Reconnecting...`; the final
+  `turn.failed` carries the message, and the process exits with code 1
+  **[observed for 401]**.
 - DeepSeek's HTTP errors map as: 402 (insufficient balance) is `Quota` with
   no reset time; 401 is `Auth`; 429 and 503 are `Unknown`, so the lane is
   retried once before it is skipped for the task. How Codex surfaces each
@@ -994,7 +998,7 @@ quota, which in the first release means an `agy` lane in `direct` mode.
 | 0 | Capture fixtures by hand on a toy repository: one plan call, one review call, one Codex task on DeepSeek (stdout, stderr, exit code). | Done 2026-11-24: the captures are in `crates/onerig-core/tests/fixtures/`. | yes, three small calls |
 | 1 | Workspace, config, store, lock, driver, fake runner, state machine, policy including the manual lane, hand-over files, worktree, plain output, `resume`, signal handling. | `cargo test` has one test per row of the failure table, per selection rule and per pause reason. End-to-end tests run the binary in a temporary repository with fake lanes and check: exit code 0, one commit per task on `onerig/<id>` and an untouched user checkout; SIGKILL during a `hang` step, then `onerig resume` exits 0; SIGTERM during a `hang` step exits 3 with `paused` / `interrupted`; the hand-over file exists for a first attempt and after a pause and is not staged by `git add -A`; `onerig resume` run from inside the worktree finishes the run; a `revise` after a manual round pauses with reason `handover` again. | no |
 | 2 | The real runner (adapter plus driver) and the Claude adapter. | Done 2026-11-24: fixture tests pass; on a toy repository Claude planned through onerig, a person did the task in the manual lane, and Claude's review approved it into one commit. | yes |
-| 3 | Codex adapter with DeepSeek. | A real task ends as one commit after an approved review. From here the tool does useful work. | yes |
+| 3 | Codex adapter with DeepSeek. | Done 2026-11-24: on a toy repository Claude planned, DeepSeek did the task through Codex, Claude approved, and the run ended as one commit in 39 s. | yes |
 | 4 | `agy` `direct` mode: probe, quota report, run. | With the opt-in key, a real task runs on `agy` and a simulated quota failure moves it to Codex. | yes |
 | 5 | Terminal UI and `doctor`. | The screen in section 14 shows a fake run; `doctor` prints one line per lane. | no |
 
