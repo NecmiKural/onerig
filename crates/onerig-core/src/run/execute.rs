@@ -140,7 +140,8 @@ impl Machine<'_> {
 
     pub(super) fn worker_prompt(&self, attempt: u32, tell_user: bool) -> Result<String, GitError> {
         let state = &self.state;
-        let (Some(task), Some(plan), Some(base)) = (self.task(), &self.plan, &state.task_base)
+        let (Some(task), Some(plan), Some(base), Some(index)) =
+            (self.task(), &self.plan, &state.task_base, state.task_index)
         else {
             return Err(GitError::Preflight("the run has no current task".into()));
         };
@@ -161,7 +162,7 @@ impl Machine<'_> {
             run_id: &state.run_id,
             goal: &state.goal,
             task,
-            task_number: state.task_index.unwrap_or(1),
+            task_number: index,
             task_total: plan.tasks.len(),
             attempt,
             worktree: &state.worktree,
@@ -247,11 +248,15 @@ impl Machine<'_> {
         message: String,
     ) -> Result<(), RunError> {
         let streak = self.state.unknown_streak;
-        match policy::after_failure(kind, reset_at, streak, self.now()) {
-            AfterFailure::MarkExhausted { until } => {
-                self.mark_exhausted(lane, until);
-                self.state.unknown_streak = 0;
-            }
+        let action = policy::after_failure(kind, reset_at, streak, self.now());
+        // Only a retry on the same lane continues the run of Unknown failures.
+        self.state.unknown_streak = if action == AfterFailure::RetrySameLane {
+            streak + 1
+        } else {
+            0
+        };
+        match action {
+            AfterFailure::MarkExhausted { until } => self.mark_exhausted(lane, until),
             AfterFailure::PauseAuth => {
                 return self.pause(PauseReason::Auth, Phase::Executing, message, None);
             }
@@ -260,9 +265,8 @@ impl Machine<'_> {
                 self.note(LogEntry::Policy(PolicyEvent::LaneSkipped {
                     lane: lane.to_string(),
                 }));
-                self.state.unknown_streak = 0;
             }
-            AfterFailure::RetrySameLane => self.state.unknown_streak += 1,
+            AfterFailure::RetrySameLane => {}
         }
         self.save()
     }

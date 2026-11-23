@@ -571,9 +571,6 @@ impl<'a> Machine<'a> {
 
     /// False when there is no task yet, or git cannot give the diff.
     fn write_pause_handover(&mut self) -> Result<bool, RunError> {
-        if self.task().is_none() || self.state.task_base.is_none() {
-            return Ok(false);
-        }
         let next = self.state.attempt.unwrap_or(0) + 1;
         match self.worker_prompt(next, true) {
             Ok(prompt) => self.write_handover(next, &prompt).map(|()| true),
