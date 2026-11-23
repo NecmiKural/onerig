@@ -1,7 +1,8 @@
 # onerig — design draft
 
-Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build step 1 has
-started. Drafts 2 and 3 resolve the findings of two rounds of independent
+Status: draft 3, 2026-11-24. Follows `concepts_brief.md`. Build step 1 is
+done: the whole loop runs end to end with scripted lanes; no real harness is
+driven yet. Drafts 2 and 3 resolve the findings of two rounds of independent
 review and of a study of how onerig and copass fit together; the last section
 lists what changed.
 
