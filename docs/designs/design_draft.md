@@ -633,14 +633,20 @@ codex exec --json --skip-git-repo-check --sandbox workspace-write
   - `models.json`: the model catalog DeepSeek publishes for Codex.
   All four keys exist in the installed binary **[observed in its strings]**.
   Codex reads the key from `DEEPSEEK_API_KEY` itself; onerig never sees it.
-- `deepseek-flash` accepts image input according to DeepSeek's Codex page;
-  the first release sends text only.
+- `deepseek-flash` accepts image input on all three of DeepSeek's wire APIs,
+  and Codex sends images when the model catalog lists the `image` input
+  modality, so onerig's `models.json` does; `deepseek-v4-pro` is text only.
+  The first release sends text only (section 18).
 - `parse` and `outcome` **[observed for success]**: `thread.started`,
   `turn.started`, `item.started` / `item.completed` (types `agent_message`,
   `command_execution`, `file_change`, `error`) and `turn.completed` with
   token usage. An `item.completed` of type `error` is a warning, not a
   failure: without a model catalog Codex reports missing model metadata this
-  way and carries on, so onerig always writes `models.json`. A usage-limit or insufficient-balance error
+  way and carries on, so onerig always writes `models.json`.
+- DeepSeek's HTTP errors map as: 402 (insufficient balance) is `Quota` with
+  no reset time; 401 is `Auth`; 429 and 503 are `Unknown`, so the lane is
+  retried once before it is skipped for the task. How Codex surfaces each
+  code is **[unobserved]**. A usage-limit or insufficient-balance error
   is `Quota` with no reset time; an unauthorised error is `Auth`; everything
   else `Unknown`. Field names come from the first captured run.
 - Probe: `codex --version` must be at least 0.164, and `codex exec --help`
@@ -1004,6 +1010,26 @@ is folded into steps 2 and 3.
   Claude Code against DeepSeek's Anthropic-compatible endpoint.
 - A `provider` key for `codex` lanes, to use GPT through the user's own Codex
   login.
+- **Images.** A plan task may list image files (screenshots, mock-ups) and a
+  lane may declare `vision = true`; selection then skips lanes without it for
+  that task. Claude reads images as planner and reviewer, Codex on
+  `deepseek-flash` takes them with `-i`, and Copilot CLI with `--attachment`.
+  Until then a task that needs an image goes to a person through a manual
+  lane.
+- **More worker harnesses**, researched 2026-11-24:
+  - *GitHub Copilot CLI* (installed, 1.0.105): `copilot -p` with
+    `--output-format json`, path-scoped tool permissions, `COPILOT_HOME`,
+    `--max-ai-credits`, error events typed as quota, rate limit or
+    authentication. GitHub documents scripted use. On the owner's Student
+    plan it has about 200 AI credits a month and Auto model selection only,
+    so it fits only as a small last lane in the chain.
+  - *Pi* (`@earendil-works/pi-coding-agent`): built-in DeepSeek provider
+    with image input, JSON and RPC modes, `PI_CODING_AGENT_DIR`; no approvals
+    and no sandbox, so onerig would have to confine it. The best alternative
+    to Codex for DeepSeek.
+  - *Cline* 3.x: DeepSeek provider and NDJSON output, but a 125 MB binary,
+    auto-approve by default with no allow-list or sandbox, no image flag, and
+    frequent releases; the installed 2.16.0 predates the 3.x rewrite.
 - API-key authentication for `agy`.
 - A separate "rate limited, wait and retry" failure kind, once a fixture shows
   a harness reports it apart from quota.
