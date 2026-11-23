@@ -9,3 +9,12 @@ description.workspace = true
 workspace = true
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+onerig-core = { version = "0.1.0", path = "../onerig-core" }
+serde = "1"
+serde_json = "1.0.154"
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

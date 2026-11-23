@@ -110,13 +110,13 @@ impl Machine<'_> {
             self.state.unknown_streak = 0;
         }
         self.state.lane = Some(name.clone());
+        let attempt = self.state.attempt.unwrap_or(0) + 1;
+        self.state.attempt = Some(attempt);
+        self.state.attempts_used += 1;
         self.note(LogEntry::Policy(PolicyEvent::LaneSelected {
             lane: name.clone(),
             manual,
         }));
-        let attempt = self.state.attempt.unwrap_or(0) + 1;
-        self.state.attempt = Some(attempt);
-        self.state.attempts_used += 1;
         let prompt = match self.worker_prompt(attempt, manual) {
             Ok(prompt) => prompt,
             Err(error) => {
