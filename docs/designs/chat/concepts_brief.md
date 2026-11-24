@@ -31,6 +31,8 @@ to it, read the answers, and watch the work happen in one place.
 | Where a message goes | To the planner (Claude Code) by default. `@<lane> <text>` sends it straight to that lane. Every agent is told whether the message came from the owner or from another agent. |
 | When workers start | Only after the owner approves the plan. A correction typed while a plan waits goes back to the planner, which revises the plan. |
 | M365 Copilot | A worker lane that drives `pi` pointed at the proxy, the path the proxy itself documents and verifies. Opt-in with an explicit risk flag, like `agy` direct mode, because it uses a work account through an unofficial client. |
+| Talking while agents work | `/btw <text>`, like Claude Code's: a side question to the planner while a run goes on (added the same day). |
+| Windows | onerig runs natively on Windows; the owner tests the M365 lane from a Windows computer (added the same day). |
 
 ## Constraints carried over
 

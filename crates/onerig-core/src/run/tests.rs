@@ -71,6 +71,7 @@ type Ran = (Result<Finished, RunError>, Vec<LogRecord>);
 enum Call<'c> {
     Start,
     Resume(Option<&'c str>),
+    StartWith(NewRun<'c>),
 }
 
 impl Fixture {
@@ -95,7 +96,12 @@ impl Fixture {
         match call {
             Call::Start => start(&self.config, cwd, "the goal", env),
             Call::Resume(id) => resume(&self.config, cwd, id, env),
+            Call::StartWith(new) => start_with(&self.config, cwd, new, env),
         }
+    }
+
+    fn start_with(&self, new: NewRun<'_>) -> Finished {
+        self.go(Call::StartWith(new), &self.main).0.unwrap()
     }
 
     fn start(&self) -> Finished {
@@ -689,4 +695,79 @@ fn a_lane_whose_quota_report_is_too_low_is_passed_over_and_the_report_is_logged(
         LogEntry::Policy(PolicyEvent::Quota { lane, remaining_fraction, .. }) if lane == "w1" && *remaining_fraction < 0.05)));
     assert!(records.iter().any(|r| matches!(&r.entry,
         LogEntry::Policy(PolicyEvent::LaneExhausted { lane, until }) if lane == "w1" && *until == Some(NOW + 3_600_000))));
+}
+
+fn approved(tasks: usize) -> Plan {
+    crate::plan::parse_plan(&plan(tasks)["outcome"]["structured"]).unwrap()
+}
+
+#[test]
+fn an_approved_plan_skips_planning_and_is_written_like_a_planned_one() {
+    let f = fixture(r#"["w1"]"#, 5, vec![work("w1", "a.txt"), approve()]);
+    let new = NewRun {
+        goal: "the goal",
+        plan: Some(approved(1)),
+        base: None,
+    };
+
+    let finished = f.start_with(new);
+
+    assert_eq!(finished.exit, Exit::Done);
+    assert_eq!(f.subjects(&finished.state.branch), ["Task 1"]);
+    let dir = RunDir::open(&f.main, &finished.run_id).unwrap();
+    assert_eq!(dir.read_plan().unwrap(), approved(1));
+}
+
+#[test]
+fn a_run_on_a_base_branch_builds_on_that_branch() {
+    let f = fixture(r#"["w1"]"#, 5, vec![work("w1", "a.txt"), approve()]);
+    f.git.must(&f.main, &["switch", "-q", "-c", "earlier"]);
+    std::fs::write(f.main.join("earlier.txt"), "x\n").unwrap();
+    f.git.must(&f.main, &["add", "earlier.txt"]);
+    f.git.must(&f.main, &["commit", "-q", "-m", "Earlier work"]);
+    f.git.must(&f.main, &["switch", "-q", "main"]);
+    let new = NewRun {
+        goal: "the goal",
+        plan: Some(approved(1)),
+        base: Some("earlier"),
+    };
+
+    let finished = f.start_with(new);
+
+    assert_eq!(
+        f.subjects(&finished.state.branch),
+        ["Earlier work", "Task 1"]
+    );
+}
+
+#[test]
+fn an_owner_task_runs_only_on_its_pinned_lane() {
+    let f = fixture(r#"["w1", "w2"]"#, 5, vec![work("w2", "b.txt"), approve()]);
+    let new = NewRun {
+        goal: "write b",
+        plan: Some(crate::plan::owner_plan("w2", "write b").unwrap()),
+        base: None,
+    };
+
+    let finished = f.start_with(new);
+
+    assert_eq!(finished.exit, Exit::Done);
+    assert_eq!(f.subjects(&finished.state.branch), ["write b"]);
+}
+
+#[test]
+fn a_pinned_lane_out_of_quota_pauses_instead_of_falling_back() {
+    let f = fixture(r#"["w1", "w2"]"#, 5, vec![fail("w1", "quota")]);
+    let new = NewRun {
+        goal: "write a",
+        plan: Some(crate::plan::owner_plan("w1", "write a").unwrap()),
+        base: None,
+    };
+
+    let finished = f.start_with(new);
+
+    let paused = paused(&finished);
+    assert_eq!(paused.reason, PauseReason::NoLane);
+    assert!(paused.message.starts_with("w1: quota exhausted"));
+    assert!(!paused.message.contains("w2"));
 }

@@ -48,11 +48,14 @@ impl Machine<'_> {
 
     fn select(&mut self) -> Selected {
         let now = self.now();
+        // An owner's task pinned to a lane never falls back to another one.
+        let pinned = self.task().and_then(|task| task.lane.clone());
         let infos: Vec<(String, bool, bool, Option<String>, LaneMark, _)> = self
             .config
             .roles
             .worker
             .iter()
+            .filter(|name| pinned.as_ref().is_none_or(|lane| lane == *name))
             .map(|name| {
                 let lane = &self.config.lanes[name];
                 let automatic = !lane.is_off() && !lane.is_manual();

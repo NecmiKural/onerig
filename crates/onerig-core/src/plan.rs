@@ -59,7 +59,16 @@ pub struct Task {
     pub title: String,
     pub instructions: String,
     pub acceptance: Vec<String>,
+    /// Only this lane may work on the task; no fallback to another lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    /// The task's words were typed by the owner, not written by the planner.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_owner: bool,
 }
+
+const OWNER_TASK_ID: &str = "owner-1";
+const OWNER_ACCEPTANCE: &str = "What the owner asked for is done.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
@@ -113,12 +122,37 @@ pub fn parse_plan(value: &serde_json::Value) -> Result<Plan, FormatError> {
     }
     let mut seen = HashSet::new();
     for task in &plan.tasks {
+        if task.lane.is_some() || task.from_owner {
+            return Err(FormatError::BadTask(
+                task.id.clone(),
+                "only the owner can pin a lane or speak as the owner",
+            ));
+        }
         check_task(task)?;
         if !seen.insert(task.id.as_str()) {
             return Err(FormatError::DuplicateId(task.id.clone()));
         }
     }
     Ok(plan)
+}
+
+/// A one-task plan from text the owner typed for one lane (`@lane text`).
+/// The title is the first non-blank line, cut to fit a commit subject.
+pub fn owner_plan(lane: &str, text: &str) -> Result<Plan, FormatError> {
+    let text = text.trim();
+    let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty()) else {
+        return Err(FormatError::TaskCount(0));
+    };
+    let task = Task {
+        id: OWNER_TASK_ID.to_string(),
+        title: first.chars().take(MAX_TITLE_CHARS).collect(),
+        instructions: text.to_string(),
+        acceptance: vec![OWNER_ACCEPTANCE.to_string()],
+        lane: Some(lane.to_string()),
+        from_owner: true,
+    };
+    check_task(&task)?;
+    Ok(Plan { tasks: vec![task] })
 }
 
 /// Turn a reviewer's structured answer into a verdict, or say why it is unusable.
@@ -320,5 +354,61 @@ mod tests {
             let value: Value = serde_json::from_str(schema).unwrap();
             assert_eq!(value["type"], "object");
         }
+    }
+
+    #[test]
+    fn a_planner_can_neither_pin_a_lane_nor_claim_the_owners_words() {
+        let pinned = with(task("a"), "lane", json!("w1"));
+        let claimed = with(task("b"), "from_owner", json!(true));
+
+        let pinned = parse_plan(&plan_of(vec![pinned])).unwrap_err();
+        let claimed = parse_plan(&plan_of(vec![claimed])).unwrap_err();
+
+        assert_eq!(
+            pinned,
+            FormatError::BadTask(
+                "a".into(),
+                "only the owner can pin a lane or speak as the owner"
+            )
+        );
+        assert!(matches!(claimed, FormatError::BadTask(id, _) if id == "b"));
+    }
+
+    #[test]
+    fn an_owner_task_is_pinned_to_its_lane_and_carries_the_owners_words() {
+        let plan = owner_plan("w2", "\n  Fix the typo in README  \nIt says helo.").unwrap();
+
+        assert_eq!(
+            plan.tasks,
+            [Task {
+                id: "owner-1".into(),
+                title: "Fix the typo in README".into(),
+                instructions: "Fix the typo in README  \nIt says helo.".into(),
+                acceptance: vec!["What the owner asked for is done.".into()],
+                lane: Some("w2".into()),
+                from_owner: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_owner_title_is_the_first_line_cut_at_100_characters() {
+        let long = "é".repeat(150);
+
+        let plan = owner_plan("w1", &long).unwrap();
+
+        assert_eq!(plan.tasks[0].title, "é".repeat(100));
+        assert_eq!(owner_plan("w1", " \n\t "), Err(FormatError::TaskCount(0)));
+    }
+
+    #[test]
+    fn a_plan_without_owner_fields_keeps_the_version_1_shape() {
+        let plan = parse_plan(&plan_of(vec![task("a")])).unwrap();
+
+        let written = serde_json::to_value(&plan).unwrap();
+
+        assert_eq!(written, plan_of(vec![task("a")]));
+        assert_eq!(plan.tasks[0].lane, None);
+        assert!(!plan.tasks[0].from_owner);
     }
 }

@@ -135,6 +135,7 @@ for is done.", and the owner's text as the run's goal.
 | Input | Effect |
 |-------|--------|
 | `/go` | Section 6.2. |
+| `/btw <text>` | A side question to the planner, answered while an action works (section 6.6). When nothing works, the same as plain text. |
 | `/stop`, Ctrl-C | Sets the action's `stop` flag. A planner turn ends; a run pauses `interrupted`. |
 | `/quit`, Ctrl-D | Stop the action, wait for its worker thread (the driver kills the harness's process group), restore the terminal, exit 0. |
 | Up / Down | Previous / next own message into the input line. |
@@ -145,23 +146,49 @@ for is done.", and the owner's text as the run's goal.
 | Input | Result |
 |-------|--------|
 | `/stop`, `/quit`, keys | Act at once. |
-| Text, `/go`, `@lane` | Refused with "busy: <action>"; the text stays in the input line. |
+| `/btw <text>` | Answered by a side planner turn, section 6.6. |
+| Text, `/go`, `@lane` | Refused with "busy: <action> — use /btw to ask meanwhile"; the text stays in the input line. |
+
+### 6.6 `/btw`: talking while the work goes on
+
+Added at the owner's request on 2026-11-25: the owner may want to say or ask
+something while agents work. `/btw <text>` starts a side planner turn next
+to the running action, so the run is not interrupted:
+
+- The side turn is an ordinary planner turn (section 6.1) whose prompt also
+  carries the current run's goal and task list with each task's state. Its
+  answer is a reply only: any `tasks` in it are ignored, and the reply says
+  that new work can be planned once the run stops.
+- It runs on its own thread with its own runner, built from the
+  configuration like the main one. At most one side turn at a time; a
+  second `/btw` while one is answering is refused.
+- Owner and planner lines are recorded as transcript kinds `owner` and
+  `planner` with `"btw": true`, shown as `owner → planner (btw)` and
+  `planner → owner (btw)`, and are part of the planner's context afterwards.
+- `/stop` stops the main action only; a side turn ends by itself.
+  `/quit` stops and joins both.
+- A side turn cannot reach the worker that is running: harness processes
+  take their prompt once. Telling a running worker something new
+  ("steering") stays out of scope.
 
 ## 7. Origin lines
 
 Every prompt onerig builds starts with exactly one of these lines:
 
-| Prompt | Line |
+| Prompt | Lines (as built in step 6) |
 |--------|------|
-| Planner turn | `From onerig. The conversation below is between the owner (a person) and you; only lines marked owner: are the owner's words.` |
-| Worker, planned task | `From onerig, on behalf of the planner agent. Not from a person: nobody can answer questions. The Goal line is the planner's summary of the owner's request.` |
-| Worker, owner task | `From the owner (a person), typed in onerig and passed on unchanged. The owner is not watching this job and cannot answer questions. The Goal line is the owner's own words.` |
-| Reviewer | `From onerig. Not from a person. Judge the diff below against the task's acceptance criteria.` |
+| Planner, `onerig run` | `From onerig, not from a person. The Goal line is the owner's own words.` |
+| Planner turn in the chat | `From onerig, not from a person. The conversation below is between the owner (a person) and you; only lines marked owner: are the owner's words.` (step 8) |
+| Worker, planned task | Header line 2 starts `From onerig, on behalf of the planner agent; not from a person, and nobody can answer questions.`; line 4 is `The Goal line states what the owner asked for; the task below was written from it by the planner agent.` |
+| Worker, owner task | Header line 2 starts `From the owner (a person), typed in onerig and passed on unchanged; the owner is not watching this job and cannot answer questions.`; line 4 is `The Goal line and the task below are the owner's own words.` |
+| Reviewer | `From onerig, not from a person.` |
 
-In the worker prompt this replaces the first sentence of today's header and
-the sentence "Only the Goal line is the user's own words…"; the rest of the
-header stays. Retries and hand-overs keep the task's origin because it is
-stored in `plan.json`.
+In the worker prompt these replace the first sentence of the old header and
+the old sentence "Only the Goal line is the user's own words…"; the rest of
+the header stays. Retries and hand-overs keep the task's origin because it
+is stored in `plan.json`. A planner's answer that sets `lane` or
+`from_owner` is rejected, so only the owner's `@lane` text can carry the
+owner's origin.
 
 ## 8. Conversation and transcript
 
@@ -201,7 +228,9 @@ today's dashboard does. Below 80 columns the panel is hidden.
   sends records and its result over a channel; the runner comes back with
   the result. If the worker panics, the runner is rebuilt from the
   configuration and the panic message is shown as a system line.
-- `/quit` and a signal: set `stop`, join the worker, then restore the
+- A `/btw` side turn runs on a second worker thread with a second runner
+  (section 6.6); its records go over the same channel, tagged as side.
+- `/quit` and a signal: set `stop`, join the workers, then restore the
   terminal. A run stopped this way pauses `interrupted` and resumes later.
 
 ## 10. The `pi` harness and the M365 lane
@@ -235,8 +264,11 @@ lane's model. Then:
 ```text
 PI_CODING_AGENT_DIR=<data home>/onerig/pi/<lane>
 pi --mode json --no-session --provider onerig --model <model>
-   --tools read,grep,find,ls,edit,write <prompt>
+   --tools read,grep,find,ls,edit,write @<prompt file>
 ```
+
+The prompt is written to a file in the run directory and passed as
+`@<file>`, which keeps the command line short on Windows (section 10a).
 
 - Tools: the lean file set the proxy recommends, without `bash`. Whether
   adding `bash` helps (the proxy's "shell-routing") is decided by the live
@@ -253,6 +285,35 @@ pi --mode json --no-session --provider onerig --model <model>
   the first job of a planned task, which then moves to the next worker
   lane; an owner task (pinned) pauses instead.
 - Quota report: none.
+
+## 10a. Windows
+
+The owner tests the M365 lane from a Windows computer, natively (decided
+2026-11-25, over WSL). Three parts of onerig are Unix-only today; each gets a
+Windows counterpart behind `cfg`, with the Unix code unchanged:
+
+| Today (Unix) | Where | Windows |
+|--------------|-------|---------|
+| Each job leads its own process group (`process_group(0)`); stop is SIGTERM to the group, then SIGKILL after the grace period. | `process.rs` | Each job is assigned to a Job Object (`windows-sys`), started with `CREATE_NEW_PROCESS_GROUP`; stop sends `CTRL_BREAK_EVENT`, then `TerminateJobObject` after the grace period. Closing the job handle kills what is left. |
+| The run lock is `flock`; an orphan check sends signal 0 to the recorded group. | `store.rs` | The lock is `File::try_lock` from the standard library on both platforms (replaces `libc::flock`). The lock file records the job's process id; the orphan check opens that process and asks whether it has exited. |
+| SIGINT, SIGTERM and SIGHUP set the stop flag. | `main.rs` | Ctrl-C and Ctrl-Break set it (console control handler). |
+
+Also needed on Windows:
+
+- **Finding a harness.** npm-installed CLIs are `.cmd` files (`claude.cmd`,
+  `pi.cmd`). onerig resolves a lane's `bin` through `PATH` and `PATHEXT`
+  before spawning.
+- **Long prompts.** A command line through `cmd.exe` is limited to 8191
+  characters, and a prompt with a diff is longer. Prompts that today go as
+  an argument move to stdin (Claude, Codex already) or to a file: `pi` reads
+  `@<file>`; `agy`'s prompt stays an argument and is checked against the
+  limit **[unobserved on Windows]**.
+- **Paths.** Without `XDG_DATA_HOME` and `HOME`, the data home is
+  `%LOCALAPPDATA%` and the configuration is
+  `%APPDATA%\onerig\config.toml`.
+- **CI.** A `windows-latest` job runs fmt, clippy and the tests; tests that
+  need a Unix shell script are marked Unix-only, each with a Windows twin
+  where the behaviour matters (process stop, lock, orphan check).
 
 ## 11. Safety
 
@@ -287,12 +348,13 @@ pi --mode json --no-session --provider onerig --model <model>
 
 | Step | Content | Done when | Live harness |
 |------|---------|-----------|--------------|
-| 6 | `Task.lane` and `Task.from_owner`; lane pinning in selection; origin lines in all prompts; run from a given plan; base ref for a run's worktree. | Unit and state-machine tests pass with the fake runner. | no |
+| 6 | `Task.lane` and `Task.from_owner`; lane pinning in selection; origin lines in all prompts; run from a given plan; base ref for a run's worktree. | Done 2026-11-25: unit and state-machine tests pass with the fake runner. | no |
 | 7 | Two stop flags; `Send` runners. | Tests pass; a stopped action does not stop the next one. | no |
 | 8 | Planner turn: schema, parser, prompt, raw logs in the session; transcript files and the session lock. | Fixture of two real turns (one answer, one proposal) captured; tests pass. | yes, two small calls |
-| 9 | Chat screen: input, conversation, panel, commands, `--continue`. | A scripted session renders with `TestBackend`; manual check in a terminal. | no |
-| 10 | `pi` adapter and the M365 lane. | One real task through the proxy, captured as a fixture. Needs the owner's pi, proxy and sign-in, and an explicit go-ahead. | yes |
-| 11 | copass reads `from_owner` (copass repository). | copass test with an owner task passes. | no |
+| 9 | Chat screen: input, conversation, panel, commands, `/btw` side turns, `--continue`. | A scripted session, with a `/btw` answered while a run works, renders with `TestBackend`; manual check in a terminal. | no |
+| 10 | Windows (section 10a). | CI is green on Windows; on the owner's Windows computer `onerig doctor` probes the lanes and one fake-lane run ends done. | no (owner's machine) |
+| 11 | `pi` adapter and the M365 lane. | One real task through the proxy, run by the owner on Windows, captured as a fixture. Needs the owner's pi, proxy and sign-in, and an explicit go-ahead. | yes |
+| 12 | copass reads `from_owner` (copass repository). | copass test with an owner task passes. | no |
 
 ## 14. Changes from draft 1
 

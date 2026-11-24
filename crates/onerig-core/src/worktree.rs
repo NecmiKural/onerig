@@ -223,14 +223,17 @@ impl Git {
         }
     }
 
+    /// `base` is the ref the new branch starts from, such as `HEAD` or an
+    /// earlier run's branch.
     pub fn create_run_worktree(
         &self,
         main: &Path,
         worktree: &Path,
         branch: &str,
+        base: &str,
     ) -> Result<(), GitError> {
         let path = worktree.to_string_lossy();
-        self.run(main, &["worktree", "add", "-b", branch, &path, "HEAD"])
+        self.run(main, &["worktree", "add", "-b", branch, &path, base])
             .map(|_| ())
     }
 
@@ -390,7 +393,7 @@ mod tests {
         fn worktree(&self, name: &str) -> PathBuf {
             let path = self.main.parent().unwrap().join(name);
             self.git
-                .create_run_worktree(&self.main, &path, &format!("onerig/{name}"))
+                .create_run_worktree(&self.main, &path, &format!("onerig/{name}"), "HEAD")
                 .unwrap();
             path
         }

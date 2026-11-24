@@ -68,6 +68,16 @@ pub enum RunError {
     AlreadyFinished(String),
 }
 
+/// What a new run starts from.
+#[derive(Debug, Clone)]
+pub struct NewRun<'g> {
+    pub goal: &'g str,
+    /// A plan the owner already approved; the run then skips planning.
+    pub plan: Option<Plan>,
+    /// The ref the run's branch starts from; the main checkout's HEAD if `None`.
+    pub base: Option<&'g str>,
+}
+
 /// Starts a new run for `goal` in the repository that contains `cwd`.
 pub fn start<'a>(
     config: &'a Config,
@@ -75,9 +85,38 @@ pub fn start<'a>(
     goal: &str,
     env: Env<'a>,
 ) -> Result<Finished, RunError> {
+    let new = NewRun {
+        goal,
+        plan: None,
+        base: None,
+    };
+    start_with(config, cwd, new, env)
+}
+
+/// Starts a new run as `new` describes.
+pub fn start_with<'a>(
+    config: &'a Config,
+    cwd: &Path,
+    new: NewRun<'_>,
+    env: Env<'a>,
+) -> Result<Finished, RunError> {
     let main = env.git.main_checkout(cwd)?;
     env.git.preflight(&main)?;
     let probes = probe_lanes(config, env.runner)?;
+    let (dir, lock, state) = create_run(&env, main, new.goal, new.base)?;
+    let mut machine = Machine::new(config, env, dir, lock, state, probes, None);
+    machine.note_run();
+    machine.begin(new.plan)?;
+    machine.finish()
+}
+
+/// Creates the run's directory, lock, branch and worktree.
+fn create_run(
+    env: &Env<'_>,
+    main: PathBuf,
+    goal: &str,
+    base: Option<&str>,
+) -> Result<(RunDir, Lock, State), RunError> {
     let now = (env.clock)();
     let run_id = crate::store::run_id(now, env.pid);
     let dir = RunDir::create(&main, &run_id)?;
@@ -85,15 +124,10 @@ pub fn start<'a>(
     env.git.ensure_excluded(&main)?;
     let worktree = worktree_path(env.data_home, &main, &run_id);
     let branch = format!("onerig/{run_id}");
-    env.git.create_run_worktree(&main, &worktree, &branch)?;
+    env.git
+        .create_run_worktree(&main, &worktree, &branch, base.unwrap_or("HEAD"))?;
     let state = new_state(&run_id, goal, now, main, worktree, branch);
-    let mut machine = Machine::new(config, env, dir, lock, state, probes, None);
-    machine.note_run();
-    machine.note(LogEntry::State(StateEvent::Phase {
-        phase: Phase::Planning,
-    }));
-    machine.save()?;
-    machine.finish()
+    Ok((dir, lock, state))
 }
 
 /// Continues the given run, or the latest one that has not finished.
@@ -460,6 +494,17 @@ impl<'a> Machine<'a> {
             Asked::Failed(problem) => self.fail(format!("the planner failed twice: {problem}")),
             Asked::Stopped => Ok(()),
         }
+    }
+
+    /// A new run plans first, or starts from a plan the owner approved.
+    fn begin(&mut self, plan: Option<Plan>) -> Result<(), RunError> {
+        let Some(plan) = plan else {
+            self.note(LogEntry::State(StateEvent::Phase {
+                phase: Phase::Planning,
+            }));
+            return self.save();
+        };
+        self.accept_plan(plan)
     }
 
     fn accept_plan(&mut self, plan: Plan) -> Result<(), RunError> {
