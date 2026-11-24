@@ -125,7 +125,8 @@ cargo test --workspace
 ```
 
 The design, including what is still open, is in
-[`docs/designs/design_draft.md`](docs/designs/design_draft.md).
+[`docs/designs/design_draft.md`](docs/designs/design_draft.md). The work in
+progress and the next step are tracked in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## License
 
