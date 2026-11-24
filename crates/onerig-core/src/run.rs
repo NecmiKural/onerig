@@ -4,9 +4,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::Config;
+use crate::halt::Halt;
 use crate::plan::{
     FormatError, PLAN_SCHEMA, Plan, Task, VERDICT_SCHEMA, Verdict, VerdictKind, parse_plan,
     parse_verdict,
@@ -31,7 +31,7 @@ pub struct Env<'a> {
     /// Unix milliseconds.
     pub clock: &'a dyn Fn() -> u64,
     pub pid: u32,
-    pub stop: &'a AtomicBool,
+    pub stop: &'a Halt,
     /// Receives every log record as it is written.
     pub sink: &'a mut dyn FnMut(&LogRecord),
     /// `$XDG_DATA_HOME` or its default; worktrees go below it.
@@ -343,7 +343,7 @@ struct Machine<'a> {
     config: &'a Config,
     git: &'a Git,
     runner: &'a mut dyn Runner,
-    stop: &'a AtomicBool,
+    stop: &'a Halt,
     clock: &'a dyn Fn() -> u64,
     log: Log<'a>,
     /// Held for the whole run; records the running harness's process group.
@@ -409,7 +409,7 @@ impl<'a> Machine<'a> {
             if let Some(exit) = exit_of(self.state.phase) {
                 return Ok(exit);
             }
-            if self.stop.load(Ordering::Relaxed) {
+            if self.stop.is_set() {
                 self.pause_interrupted()?;
                 continue;
             }
@@ -595,7 +595,7 @@ impl<'a> Machine<'a> {
             },
         );
         let _ = self.lock.set_pgid(None);
-        if self.stop.load(Ordering::Relaxed) {
+        if self.stop.is_set() {
             return Ok(None);
         }
         self.log.record(

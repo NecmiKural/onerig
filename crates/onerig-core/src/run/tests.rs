@@ -2,8 +2,7 @@
 //! one test per pause reason and per path through a task.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -12,6 +11,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::{self, Config};
 use crate::fake::FakeRunner;
+use crate::halt::Halt;
 
 const NOW: u64 = 1_795_464_900_000;
 
@@ -22,7 +22,7 @@ struct Fixture {
     script: PathBuf,
     config: Config,
     git: Git,
-    stop: Arc<AtomicBool>,
+    stop: Halt,
 }
 
 /// A repository with one commit, fake lanes plan, review, w1 and w2, a manual
@@ -62,7 +62,7 @@ fn fixture(workers: &str, max_attempts: u32, steps: Vec<Value>) -> Fixture {
         main,
         script,
         git,
-        stop: Arc::new(AtomicBool::new(false)),
+        stop: Halt::new(),
     }
 }
 
@@ -76,7 +76,7 @@ enum Call<'c> {
 
 impl Fixture {
     fn go(&self, call: Call<'_>, cwd: &Path) -> Ran {
-        let mut runner = FakeRunner::new(&self.script, Arc::clone(&self.stop)).unwrap();
+        let mut runner = FakeRunner::new(&self.script, self.stop.clone()).unwrap();
         let mut records = Vec::new();
         let clock = || NOW;
         let env = Env {
@@ -451,12 +451,12 @@ fn a_stop_during_a_worker_pauses_as_interrupted_and_resume_starts_a_new_attempt(
         .join("onerig/worktrees/shop")
         .join(crate::store::run_id(NOW, 7))
         .join("half.txt");
-    let stop = Arc::clone(&f.stop);
+    let stop = f.stop.clone();
     let stopper = thread::spawn(move || {
         while !half.exists() {
             thread::sleep(Duration::from_millis(10));
         }
-        stop.store(true, Ordering::Relaxed);
+        stop.stop();
     });
 
     let first = f.start();
@@ -464,7 +464,7 @@ fn a_stop_during_a_worker_pauses_as_interrupted_and_resume_starts_a_new_attempt(
     assert_eq!(paused(&first).reason, PauseReason::Interrupted);
     assert_eq!(first.state.last_end, Some(LastEnd::Interrupted));
     assert!(f.handover(&first, 1, 2).contains("(interrupted)"));
-    f.stop.store(false, Ordering::Relaxed);
+    f.stop.clear_stop();
 
     let second = f.resume();
     assert_eq!(second.exit, Exit::Done);
@@ -770,4 +770,17 @@ fn a_pinned_lane_out_of_quota_pauses_instead_of_falling_back() {
     assert_eq!(paused.reason, PauseReason::NoLane);
     assert!(paused.message.starts_with("w1: quota exhausted"));
     assert!(!paused.message.contains("w2"));
+}
+
+#[test]
+fn after_a_quit_every_action_pauses_even_when_its_stop_is_cleared() {
+    let f = fixture(r#"["w1"]"#, 5, vec![]);
+    f.stop.quit_flag().store(true, Ordering::Relaxed);
+
+    let first = f.start();
+    f.stop.clear_stop();
+    let second = f.resume();
+
+    assert_eq!(paused(&first).reason, PauseReason::Interrupted);
+    assert_eq!(paused(&second).reason, PauseReason::Interrupted);
 }

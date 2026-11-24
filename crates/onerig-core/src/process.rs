@@ -8,12 +8,12 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::adapter::{Output, Spawn};
+use crate::halt::Halt;
 
 /// How long a child gets to leave after SIGTERM, and how long its pipes may
 /// stay open after it has exited.
@@ -46,7 +46,7 @@ pub fn run(
     spawn: &Spawn,
     cwd: &Path,
     limits: Limits,
-    stop: &AtomicBool,
+    stop: &Halt,
     on_spawn: &mut dyn FnMut(i32),
     on_line: &mut dyn FnMut(&str),
 ) -> Ended {
@@ -180,7 +180,7 @@ impl Job {
     fn wait_for_end(
         &mut self,
         limits: Limits,
-        stop: &AtomicBool,
+        stop: &Halt,
         on_line: &mut dyn FnMut(&str),
     ) -> Reason {
         loop {
@@ -225,11 +225,11 @@ impl Job {
         }
     }
 
-    fn reason(&self, limits: Limits, stop: &AtomicBool) -> Option<Reason> {
+    fn reason(&self, limits: Limits, stop: &Halt) -> Option<Reason> {
         let done = |at: Instant| self.open_pipes == 0 || at.elapsed() >= GRACE;
         if self.exited_at.is_some_and(done) {
             Some(Reason::Exited)
-        } else if stop.load(Ordering::Relaxed) {
+        } else if stop.is_set() {
             Some(Reason::Stopped)
         } else if self.last_line.elapsed() >= limits.idle {
             Some(Reason::Idle)
@@ -323,7 +323,6 @@ fn read_chunks(mut pipe: impl Read, sender: &Sender<Piece>) {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
-    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Instant;
 
@@ -348,7 +347,7 @@ mod tests {
         }
     }
 
-    fn drive(spawn: &Spawn, cwd: &Path, limits: Limits, stop: &AtomicBool) -> Seen {
+    fn drive(spawn: &Spawn, cwd: &Path, limits: Limits, stop: &Halt) -> Seen {
         let (mut pgids, mut lines) = (Vec::new(), Vec::new());
         let started = Instant::now();
         let ended = run(
@@ -368,7 +367,7 @@ mod tests {
     }
 
     fn drive_here(spawn: &Spawn, limits: Limits) -> Seen {
-        drive(spawn, Path::new("."), limits, &AtomicBool::new(false))
+        drive(spawn, Path::new("."), limits, &Halt::new())
     }
 
     fn exited(ended: Ended) -> Output {
@@ -511,7 +510,7 @@ mod tests {
             ..sh("cat a/b/absolute.txt; echo; cat c/relative.txt")
         };
 
-        let seen = drive(&spawn, dir.path(), ROOMY, &AtomicBool::new(false));
+        let seen = drive(&spawn, dir.path(), ROOMY, &Halt::new());
 
         assert_eq!(seen.lines, ["absolute", "relative"]);
     }
@@ -525,7 +524,7 @@ mod tests {
             ..sh("exit 0")
         };
 
-        let seen = drive(&spawn, dir.path(), ROOMY, &AtomicBool::new(false));
+        let seen = drive(&spawn, dir.path(), ROOMY, &Halt::new());
 
         assert!(
             matches!(&seen.ended, Ended::SpawnFailed(message) if message.contains("blocker/prompt.txt")),
@@ -638,13 +637,13 @@ mod tests {
 
     #[test]
     fn the_stop_flag_set_from_another_thread_ends_the_job_as_stopped() {
-        let stop = AtomicBool::new(false);
+        let stop = Halt::new();
         let spawn = sh("echo started; sleep 30");
 
         let seen = thread::scope(|scope| {
             scope.spawn(|| {
                 thread::sleep(Duration::from_millis(300));
-                stop.store(true, Ordering::Relaxed);
+                stop.stop();
             });
             drive(&spawn, Path::new("."), ROOMY, &stop)
         });

@@ -28,7 +28,8 @@ pub struct Output {
 }
 
 /// One value per lane, built from that lane's configuration.
-pub trait Adapter {
+/// `Send` so a runner holding adapters can work on a background thread.
+pub trait Adapter: Send {
     fn probe_spawns(&self) -> Vec<Spawn>;
     fn probe_result(&self, outputs: &[Output]) -> Result<Probe, ProbeError>;
     fn quota_spawn(&self) -> Option<Spawn>;

@@ -2,11 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::adapter::{Adapter, Output, Spawn};
+use crate::halt::Halt;
 use crate::process::{self, Ended, Limits};
 use crate::runner::{
     FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Runner,
@@ -18,7 +17,7 @@ const PROBE_LIMIT: Duration = Duration::from_secs(30);
 pub struct HarnessRunner {
     adapters: BTreeMap<String, Box<dyn Adapter>>,
     limits: Limits,
-    stop: Arc<AtomicBool>,
+    stop: Halt,
     /// Working directory of probe and quota calls: the main checkout.
     probe_cwd: PathBuf,
 }
@@ -27,7 +26,7 @@ impl HarnessRunner {
     pub fn new(
         adapters: BTreeMap<String, Box<dyn Adapter>>,
         limits: Limits,
-        stop: Arc<AtomicBool>,
+        stop: Halt,
         probe_cwd: PathBuf,
     ) -> HarnessRunner {
         HarnessRunner {
@@ -244,7 +243,7 @@ mod tests {
     fn runner(adapter: Shell, limits: Limits) -> HarnessRunner {
         let adapters: BTreeMap<String, Box<dyn Adapter>> =
             BTreeMap::from([("lane".to_string(), Box::new(adapter) as Box<dyn Adapter>)]);
-        HarnessRunner::new(adapters, limits, Arc::default(), std::env::temp_dir())
+        HarnessRunner::new(adapters, limits, Halt::new(), std::env::temp_dir())
     }
 
     fn shell(script: &'static str) -> Shell {
@@ -445,5 +444,13 @@ mod tests {
         fn outcome(&self, _: &Job, _: &Output) -> Outcome {
             Outcome::failed(FailureKind::Unknown, String::new())
         }
+    }
+
+    fn can_move_to_a_thread<T: Send>() {}
+
+    #[test]
+    fn runners_can_move_to_a_worker_thread() {
+        can_move_to_a_thread::<HarnessRunner>();
+        can_move_to_a_thread::<crate::fake::FakeRunner>();
     }
 }

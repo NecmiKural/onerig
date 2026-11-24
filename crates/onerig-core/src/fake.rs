@@ -5,13 +5,12 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::halt::Halt;
 use crate::runner::{
     FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Runner,
 };
@@ -61,11 +60,11 @@ pub struct FakeRunner {
     script: Script,
     position_file: PathBuf,
     position: usize,
-    stop: Arc<AtomicBool>,
+    stop: Halt,
 }
 
 impl FakeRunner {
-    pub fn new(script_path: &Path, stop: Arc<AtomicBool>) -> Result<FakeRunner, FakeError> {
+    pub fn new(script_path: &Path, stop: Halt) -> Result<FakeRunner, FakeError> {
         let read_error = |path: &Path, e: std::io::Error| FakeError::Read {
             path: path.to_path_buf(),
             message: e.to_string(),
@@ -97,7 +96,7 @@ impl FakeRunner {
     }
 
     fn hang(&self) -> Outcome {
-        while !self.stop.load(Ordering::Relaxed) {
+        while !self.stop.is_set() {
             thread::sleep(HANG_SLICE);
         }
         unknown("stopped".to_string())
@@ -225,7 +224,7 @@ mod tests {
 
     impl Setup {
         fn runner(&self) -> FakeRunner {
-            FakeRunner::new(&self.script, Arc::new(AtomicBool::new(false))).unwrap()
+            FakeRunner::new(&self.script, Halt::new()).unwrap()
         }
 
         fn job(&self) -> Job {
@@ -428,14 +427,14 @@ mod tests {
             { "lane": "w", "hang": true, "writes": [["partial.txt", "x"]] },
             { "lane": "w", "outcome": done("after") }
         ]}));
-        let stop = Arc::new(AtomicBool::new(false));
-        let mut runner = FakeRunner::new(&setup.script, Arc::clone(&stop)).unwrap();
+        let stop = Halt::new();
+        let mut runner = FakeRunner::new(&setup.script, stop.clone()).unwrap();
         let job = setup.job();
 
         let outcome = thread::scope(|scope| {
             scope.spawn(|| {
                 thread::sleep(Duration::from_millis(100));
-                stop.store(true, Ordering::Relaxed);
+                stop.stop();
             });
             run(&mut runner, "w", &job).0
         });
@@ -456,14 +455,14 @@ mod tests {
     fn a_step_without_an_outcome_must_hang() {
         let setup = setup(json!({ "steps": [{ "lane": "w" }] }));
 
-        let error = FakeRunner::new(&setup.script, Arc::new(AtomicBool::new(false))).unwrap_err();
+        let error = FakeRunner::new(&setup.script, Halt::new()).unwrap_err();
 
         assert!(matches!(error, FakeError::Script { message, .. } if message.contains("step 1")));
     }
 
     #[test]
     fn a_missing_script_is_a_read_error() {
-        let error = FakeRunner::new(Path::new("/nonexistent/s.json"), Arc::default()).unwrap_err();
+        let error = FakeRunner::new(Path::new("/nonexistent/s.json"), Halt::new()).unwrap_err();
 
         assert!(matches!(error, FakeError::Read { .. }));
     }

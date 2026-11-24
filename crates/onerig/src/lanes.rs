@@ -3,8 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context, bail};
 use onerig_core::adapter::Adapter;
@@ -13,6 +11,7 @@ use onerig_core::adapter::claude::Claude;
 use onerig_core::adapter::codex::Codex;
 use onerig_core::config::{Config, HarnessKind, Lane};
 use onerig_core::fake::FakeRunner;
+use onerig_core::halt::Halt;
 use onerig_core::harness::HarnessRunner;
 use onerig_core::process::Limits;
 use onerig_core::runner::{HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Runner};
@@ -27,7 +26,7 @@ impl Lanes {
     /// `data_home` is where lanes that need a directory of their own keep it.
     pub fn build(
         config: &Config,
-        stop: &Arc<AtomicBool>,
+        stop: &Halt,
         cwd: &Path,
         data_home: &Path,
     ) -> anyhow::Result<Lanes> {
@@ -37,9 +36,9 @@ impl Lanes {
             script,
         } = sort_lanes(config, data_home)?;
         let scripted = match script {
-            Some(path) => Some(
-                FakeRunner::new(&path, Arc::clone(stop)).context("cannot load the fake script")?,
-            ),
+            Some(path) => {
+                Some(FakeRunner::new(&path, stop.clone()).context("cannot load the fake script")?)
+            }
             None => None,
         };
         let limits = Limits {
@@ -49,7 +48,7 @@ impl Lanes {
         Ok(Lanes {
             scripted,
             scripted_lanes,
-            harness: HarnessRunner::new(adapters, limits, Arc::clone(stop), cwd.to_path_buf()),
+            harness: HarnessRunner::new(adapters, limits, stop.clone(), cwd.to_path_buf()),
         })
     }
 
@@ -179,7 +178,7 @@ mod tests {
     fn scripted_lanes_go_to_the_fake_runner_and_manual_lanes_need_nothing() {
         let script = script();
         let config = config_with("\"w\", \"gemini\"", "", script.path());
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Halt::new();
 
         let mut lanes = Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).unwrap();
 
@@ -199,7 +198,7 @@ mod tests {
         let direct = "mode = \"direct\"\nquota_group = \"G\"\naccept_vendor_terms_risk = true\n";
         let config = config_with("\"gemini\"", direct, script.path());
         let manual = config_with("\"gemini\"", "", script.path());
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Halt::new();
 
         assert!(Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).is_ok());
         assert!(
@@ -215,10 +214,17 @@ mod tests {
         let script = script();
         let codex = "\n[lanes.deepseek]\nharness = \"codex\"\nmodel = \"deepseek-flash\"\n";
         let config = config_with("\"deepseek\"", codex, script.path());
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = Halt::new();
 
         let mut lanes = Lanes::build(&config, &stop, Path::new("."), Path::new("/data")).unwrap();
 
         assert_eq!(lanes.quota("deepseek"), None);
+    }
+
+    fn can_move_to_a_thread<T: Send>() {}
+
+    #[test]
+    fn the_lanes_runner_can_move_to_a_worker_thread() {
+        can_move_to_a_thread::<Lanes>();
     }
 }

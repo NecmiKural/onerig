@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use onerig_core::config::Config;
+use onerig_core::halt::Halt;
 use onerig_core::store::{LogEntry, LogRecord, PolicyEvent, StateEvent};
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -253,7 +254,7 @@ fn splash(height: usize) -> Paragraph<'static> {
 }
 
 /// Watches the keyboard until `finished` is set; `q` and Ctrl-C set `stop`.
-pub fn watch_keys(stop: Arc<AtomicBool>, finished: Arc<AtomicBool>) -> JoinHandle<()> {
+pub fn watch_keys(stop: Halt, finished: Arc<AtomicBool>) -> JoinHandle<()> {
     thread::spawn(move || key_loop(&stop, &finished, next_key))
 }
 
@@ -265,10 +266,10 @@ fn next_key() -> Option<Event> {
     }
 }
 
-fn key_loop(stop: &AtomicBool, finished: &AtomicBool, mut next: impl FnMut() -> Option<Event>) {
+fn key_loop(stop: &Halt, finished: &AtomicBool, mut next: impl FnMut() -> Option<Event>) {
     while !finished.load(Ordering::Relaxed) {
         if next().is_some_and(|event| is_stop_key(&event)) {
-            stop.store(true, Ordering::Relaxed);
+            stop.stop();
         }
     }
 }
@@ -594,7 +595,7 @@ model = "m"
 
     #[test]
     fn the_key_loop_sets_stop_and_ends_when_the_run_is_finished() {
-        let stop = AtomicBool::new(false);
+        let stop = Halt::new();
         let finished = AtomicBool::new(false);
         let mut keys = vec![
             None,
@@ -611,7 +612,7 @@ model = "m"
             next.flatten()
         });
 
-        assert!(stop.load(Ordering::Relaxed));
+        assert!(stop.is_set());
     }
 
     #[test]

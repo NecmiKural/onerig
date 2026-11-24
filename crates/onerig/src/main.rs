@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use onerig_core::config::{self, Config, ConfigError};
+use onerig_core::halt::Halt;
 use onerig_core::run::{self, Env, Exit, Finished};
 use onerig_core::store::LogRecord;
 use onerig_core::worktree::{Git, data_home};
@@ -76,7 +77,7 @@ struct Session<'s> {
     config: &'s Config,
     cwd: &'s Path,
     data: &'s Path,
-    stop: &'s Arc<AtomicBool>,
+    stop: &'s Halt,
 }
 
 fn run_cli(cli: Cli) -> anyhow::Result<ExitCode> {
@@ -168,7 +169,7 @@ fn execute_on_screen(session: &Session<'_>, runner: &mut lanes::Lanes) -> anyhow
     let mut screen = tui::Screen::new(session.config);
     let finished = Arc::new(AtomicBool::new(false));
     let mut terminal = ratatui::init();
-    let keys = tui::watch_keys(Arc::clone(session.stop), Arc::clone(&finished));
+    let keys = tui::watch_keys(session.stop.clone(), Arc::clone(&finished));
     // A frame that cannot be drawn is skipped; the next record draws again.
     let _ = terminal.draw(|frame| screen.render(frame));
     let result = execute(session, runner, &mut |record| {
@@ -198,15 +199,15 @@ fn dispatch<'a>(
     }
 }
 
-/// SIGINT, SIGTERM and SIGHUP set the stop flag; the run then pauses.
-fn watch_signals() -> anyhow::Result<Arc<AtomicBool>> {
-    let stop = Arc::new(AtomicBool::new(false));
+/// SIGINT, SIGTERM and SIGHUP set the quit flag; the run then pauses.
+fn watch_signals() -> anyhow::Result<Halt> {
+    let stop = Halt::new();
     for signal in [
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
         signal_hook::consts::SIGHUP,
     ] {
-        signal_hook::flag::register(signal, Arc::clone(&stop)).context("cannot watch signals")?;
+        signal_hook::flag::register(signal, stop.quit_flag()).context("cannot watch signals")?;
     }
     Ok(stop)
 }

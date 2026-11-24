@@ -349,7 +349,7 @@ Also needed on Windows:
 | Step | Content | Done when | Live harness |
 |------|---------|-----------|--------------|
 | 6 | `Task.lane` and `Task.from_owner`; lane pinning in selection; origin lines in all prompts; run from a given plan; base ref for a run's worktree. | Done 2026-11-25: unit and state-machine tests pass with the fake runner. | no |
-| 7 | Two stop flags; `Send` runners. | Tests pass; a stopped action does not stop the next one. | no |
+| 7 | Two stop flags; `Send` runners. | Done 2026-11-25: `Halt` holds a quit flag (signals, never cleared) and a stop flag (cleared per action); tests show a cleared stop lets the next action run and a quit keeps pausing; runners are `Send`. | no |
 | 8 | Planner turn: schema, parser, prompt, raw logs in the session; transcript files and the session lock. | Fixture of two real turns (one answer, one proposal) captured; tests pass. | yes, two small calls |
 | 9 | Chat screen: input, conversation, panel, commands, `/btw` side turns, `--continue`. | A scripted session, with a `/btw` answered while a run works, renders with `TestBackend`; manual check in a terminal. | no |
 | 10 | Windows (section 10a). | CI is green on Windows; on the owner's Windows computer `onerig doctor` probes the lanes and one fake-lane run ends done. | no (owner's machine) |

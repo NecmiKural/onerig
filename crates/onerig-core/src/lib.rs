@@ -5,6 +5,7 @@
 pub mod adapter;
 pub mod config;
 pub mod fake;
+pub mod halt;
 pub mod harness;
 pub mod plan;
 pub mod policy;
