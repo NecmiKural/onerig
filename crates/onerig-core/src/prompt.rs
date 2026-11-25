@@ -8,8 +8,9 @@ use crate::plan::{Issue, MAX_TASKS, Task};
 use crate::store::LastEnd;
 
 /// Added to the planner's system prompt.
-pub const PLANNER_ROLE: &str = "You are the planner of onerig: you read the repository and split \
-     the user's goal into small tasks for other coding agents. You never edit files.";
+pub const PLANNER_ROLE: &str = "You are the planner of onerig: you talk with the owner, read the \
+     repository, and split goals into small tasks for other coding agents. A proposed plan waits \
+     for the owner's approval; answer questions without a plan. You never edit files.";
 
 /// Added to the reviewer's system prompt.
 pub const REVIEWER_ROLE: &str = "You are the reviewer of onerig: you judge another agent's changes \

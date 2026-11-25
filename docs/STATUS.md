@@ -22,29 +22,29 @@ independent reviewers). The owner's decisions: `docs/designs/chat/concepts_brief
 |------|------|-------|
 | 6 | `Task.lane`, `Task.from_owner`, lane pinning, origin lines in every prompt, start a run from an approved plan on a base ref | done, `f0c3269` |
 | 7 | `Halt` (quit and per-action stop), `Send` runners | done, `f43234b` |
-| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | done |
-| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | **next** |
-| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | to do |
+| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | done, `5585a67` |
+| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | done |
+| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | **next** |
 | 10 | Native Windows support (design section 10a) | to do |
 | 11 | `pi` adapter and the M365 lane; the owner runs the live task on Windows | to do |
 | 12 | copass reads `from_owner` (in the copass repository) | to do |
 
-## Next: step 7b, then step 8
+## Next: step 9, concretely
 
-1. **Step 7b** (flexible role/provider/model support):
-   - Default planner model `opus` in `config::EXAMPLE`; `codex` `provider`
-     (`"deepseek"` default or `"openai"`).
-   - Allow any automatic (`mode = "direct"`) lane to serve `planner`,
-     `reviewer`, or `worker`; update `Claude`, `Codex`, and `Agy` adapters for
-     role-aware tools, sandboxing, and structured output extraction.
-   - Add `catalog.rs` and `config::to_toml` / `config::save`.
-2. **Step 8** (planner turn & sessions; read design sections 5, 6.1, 6.6, 8 and 13):
-   - Answer schema and parser (`{ "reply", "goal", "tasks" }`), conversation
-     prompt (`40` messages / `24,000` chars), `SessionDir` + `transcript.jsonl`
-     + session lock + `raw-<n>.log`, and `run_turn`.
-   - Live capture (approved by the owner): two small `claude -p` planner turns
-     on a toy repo under `target/` saved as sanitized fixtures under
-     `crates/onerig-core/tests/fixtures/claude/`.
+1. **CLI entry & options (`crates/onerig/src/main.rs`)**:
+   - Running `onerig` with no subcommand opens the interactive chat screen
+     (requires a terminal).
+   - `--continue` reopens the latest session in the repository (chat-only).
+   - Global `--config <path>` works across chat, `run`, `resume`, `doctor`.
+2. **Chat screen & `/model` picker (`crates/onerig/src/chat/`)**:
+   - Conversation pane (`owner` / `planner` / `(btw)` / `system` / run log
+     records), Tasks + Roles/Lanes right panel (hidden below 80 cols), input
+     box with `Up`/`Down` history and `PgUp`/`PgDn` scroll.
+   - Commands: `/go`, `@<lane> <text>`, `/btw <text>`, `/model`, `/stop` /
+     `Ctrl-C`, `/quit` / `Ctrl-D`.
+   - `/model` modal picker: role → provider → model/effort/risk + ordered
+     worker chain editor, persisting atomically to `config.toml` and rebuilding
+     `Lanes`.
 
 ## Rules for whoever continues
 

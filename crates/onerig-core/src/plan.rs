@@ -117,11 +117,17 @@ pub enum FormatError {
 /// Turn a planner's structured answer into a plan, or say why it is unusable.
 pub fn parse_plan(value: &serde_json::Value) -> Result<Plan, FormatError> {
     let plan = Plan::deserialize(value).map_err(|e| FormatError::Shape(e.to_string()))?;
-    if plan.tasks.is_empty() || plan.tasks.len() > MAX_TASKS {
-        return Err(FormatError::TaskCount(plan.tasks.len()));
+    check_tasks(&plan.tasks)?;
+    Ok(plan)
+}
+
+/// Validates a non-empty list of planner-authored tasks (rejecting owner-only fields).
+pub(crate) fn check_tasks(tasks: &[Task]) -> Result<(), FormatError> {
+    if tasks.is_empty() || tasks.len() > MAX_TASKS {
+        return Err(FormatError::TaskCount(tasks.len()));
     }
     let mut seen = HashSet::new();
-    for task in &plan.tasks {
+    for task in tasks {
         if task.lane.is_some() || task.from_owner {
             return Err(FormatError::BadTask(
                 task.id.clone(),
@@ -133,7 +139,7 @@ pub fn parse_plan(value: &serde_json::Value) -> Result<Plan, FormatError> {
             return Err(FormatError::DuplicateId(task.id.clone()));
         }
     }
-    Ok(plan)
+    Ok(())
 }
 
 /// A one-task plan from text the owner typed for one lane (`@lane text`).

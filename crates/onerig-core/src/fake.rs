@@ -180,6 +180,11 @@ impl Runner for FakeRunner {
         _on_spawn: &mut dyn FnMut(i32),
         on_event: &mut dyn FnMut(HarnessEvent),
     ) -> Outcome {
+        if let Ok(text) = std::fs::read_to_string(&self.position_file)
+            && let Ok(pos) = text.trim().parse::<usize>()
+        {
+            self.position = self.position.max(pos);
+        }
         let number = self.position + 1;
         let Some(step) = self.script.steps.get(self.position) else {
             return unknown(format!(
@@ -465,5 +470,43 @@ mod tests {
         let error = FakeRunner::new(Path::new("/nonexistent/s.json"), Halt::new()).unwrap_err();
 
         assert!(matches!(error, FakeError::Read { .. }));
+    }
+
+    #[test]
+    fn two_runners_sharing_one_script_advance_past_each_other_without_replaying() {
+        let setup = setup(json!({ "steps": [
+            { "lane": "w", "outcome": done("one") },
+            { "lane": "p", "outcome": done("two") },
+            { "lane": "w", "outcome": done("three") }
+        ]}));
+        let mut main = setup.runner();
+        let mut side = setup.runner();
+        let job = setup.job();
+
+        let (first, _) = run(&mut main, "w", &job);
+        let (second, _) = run(&mut side, "p", &job);
+        let (third, _) = run(&mut main, "w", &job);
+
+        assert_eq!(
+            first,
+            Outcome::Done {
+                text: "one".into(),
+                structured: None
+            }
+        );
+        assert_eq!(
+            second,
+            Outcome::Done {
+                text: "two".into(),
+                structured: None
+            }
+        );
+        assert_eq!(
+            third,
+            Outcome::Done {
+                text: "three".into(),
+                structured: None
+            }
+        );
     }
 }

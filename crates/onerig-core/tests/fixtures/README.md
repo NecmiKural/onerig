@@ -11,6 +11,8 @@ deliberate authentication failure.
 |------|---------|
 | `claude/plan.jsonl` | `claude -p --safe-mode --model sonnet --effort medium --output-format stream-json --verbose --json-schema <PLAN_SCHEMA> --permission-mode dontAsk --no-session-persistence --append-system-prompt <role> --tools Read Glob Grep --disallowedTools AskUserQuestion` (Claude Code 2.1.330, prompt on stdin) |
 | `claude/review.jsonl` | the same with `--effort low` and `<VERDICT_SCHEMA>` |
+| `claude/chat-answer.jsonl` | the same with `--effort low` and `<TURN_SCHEMA>`, plain question (`tasks: []`) |
+| `claude/chat-proposal.jsonl` | the same with `--effort low` and `<TURN_SCHEMA>`, feature request (`tasks` non-empty) |
 | `agy/usage.json` | `agy -p /usage --output-format json --print-timeout 60s` (agy 1.5.14, `AGY_CLI_DISABLE_AUTO_UPDATE=true`); zero tokens, no conversation |
 | `agy/task.jsonl` | `agy -p <prompt> --dangerously-skip-permissions --sandbox --output-format stream-json --model gemini-4-hydrogen-medium --print-timeout 30m` (agy 1.5.14, same environment); conversation id replaced |
 | `codex/deepseek-auth-failure.jsonl` | the same, with `DEEPSEEK_API_KEY` set to an invalid test key; exit code 1 |
