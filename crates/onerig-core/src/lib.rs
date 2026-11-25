@@ -3,6 +3,7 @@
 //! command-line tool, a terminal UI or a GUI can all be built on it.
 
 pub mod adapter;
+pub mod catalog;
 pub mod config;
 pub mod fake;
 pub mod halt;

@@ -22,8 +22,8 @@ independent reviewers). The owner's decisions: `docs/designs/chat/concepts_brief
 |------|------|-------|
 | 6 | `Task.lane`, `Task.from_owner`, lane pinning, origin lines in every prompt, start a run from an approved plan on a base ref | done, `f0c3269` |
 | 7 | `Halt` (quit and per-action stop), `Send` runners | done, `f43234b` |
-| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | **next** |
-| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | to do |
+| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | done |
+| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | **next** |
 | 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | to do |
 | 10 | Native Windows support (design section 10a) | to do |
 | 11 | `pi` adapter and the M365 lane; the owner runs the live task on Windows | to do |

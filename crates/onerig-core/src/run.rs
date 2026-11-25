@@ -2,7 +2,7 @@
 //! commit, pause and resume. It talks to harnesses only through `Runner`, so
 //! it is tested with the scripted runner.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -235,7 +235,11 @@ fn prepare_resume(state: &mut State) {
 /// never probed.
 fn probe_lanes(config: &Config, runner: &mut dyn Runner) -> Result<Probes, RunError> {
     let mut probes = Probes::default();
+    let mut seen = HashSet::new();
     for lane in [&config.roles.planner, &config.roles.reviewer] {
+        if !seen.insert(lane.clone()) {
+            continue;
+        }
         let result = runner.preflight(lane);
         if let Err(error) = &result {
             return Err(RunError::Probe {
@@ -246,6 +250,9 @@ fn probe_lanes(config: &Config, runner: &mut dyn Runner) -> Result<Probes, RunEr
         probes.results.push((lane.clone(), result));
     }
     for name in &config.roles.worker {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
         let lane = &config.lanes[name];
         if lane.is_off() || lane.is_manual() {
             continue;

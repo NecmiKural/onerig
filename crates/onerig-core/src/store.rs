@@ -424,15 +424,21 @@ impl RunDir {
 
 fn write_atomically(path: &Path, value: &impl Serialize) -> Result<(), StoreError> {
     let text = serde_json::to_string_pretty(value).map_err(|e| format_error(path, e))?;
-    let temporary = path.with_extension("json.tmp");
-    let write = || -> std::io::Result<()> {
-        let mut file = File::create(&temporary)?;
-        file.write_all(text.as_bytes())?;
+    write_text_atomically(path, &text).map_err(|e| io_error(path, e))
+}
+
+/// Replaces `path` atomically with `text`, appending a trailing newline if absent.
+pub(crate) fn write_text_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+    let mut tmp_name = path.as_os_str().to_os_string();
+    tmp_name.push(".tmp");
+    let temporary = PathBuf::from(tmp_name);
+    let mut file = File::create(&temporary)?;
+    file.write_all(text.as_bytes())?;
+    if !text.ends_with('\n') {
         file.write_all(b"\n")?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, path)
-    };
-    write().map_err(|e| io_error(path, e))
+    }
+    file.sync_all()?;
+    std::fs::rename(&temporary, path)
 }
 
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StoreError> {
@@ -440,20 +446,25 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StoreError> {
     serde_json::from_str(&text).map_err(|e| format_error(path, e))
 }
 
-/// The greatest run id whose phase is neither done nor failed. Runs that
-/// cannot be read are skipped.
-pub fn latest_resumable(repo: &Path) -> Result<Option<String>, StoreError> {
-    let root = runs_root(repo);
-    let entries = match std::fs::read_dir(&root) {
+/// Directory entry names inside `root`, sorted descending; empty if `root` does not exist.
+pub(crate) fn sorted_entries(root: &Path) -> Result<Vec<String>, StoreError> {
+    let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(io_error(&root, e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(io_error(root, e)),
     };
     let mut ids: Vec<String> = entries
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().into_string().ok())
         .collect();
     ids.sort_unstable_by(|a, b| b.cmp(a));
+    Ok(ids)
+}
+
+/// The greatest run id whose phase is neither done nor failed. Runs that
+/// cannot be read are skipped.
+pub fn latest_resumable(repo: &Path) -> Result<Option<String>, StoreError> {
+    let ids = sorted_entries(&runs_root(repo))?;
     Ok(ids.into_iter().find(|id| is_resumable(repo, id)))
 }
 
@@ -492,7 +503,11 @@ pub struct Lock {
 
 impl Lock {
     pub fn acquire(run_dir: &RunDir) -> Result<Lock, LockError> {
-        let path = run_dir.path().join("lock");
+        Self::acquire_file(run_dir.path().join("lock"))
+    }
+
+    /// Takes an exclusive non-blocking lock on an arbitrary lock file path.
+    pub fn acquire_file(path: PathBuf) -> Result<Lock, LockError> {
         let lock_io = |e: std::io::Error| LockError::Io {
             path: path.clone(),
             message: e.to_string(),

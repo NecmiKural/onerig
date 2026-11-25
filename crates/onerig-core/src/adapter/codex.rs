@@ -6,9 +6,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Output, Spawn};
-use crate::config::Lane;
-use crate::runner::{FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport};
+use super::{
+    Adapter, Output, Spawn, classify_error_text, exit_message, extract_json_object, json_lines,
+    prepend_role,
+};
+use crate::config::{CodexProvider, Lane};
+use crate::runner::{
+    FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Role,
+};
 
 /// DeepSeek documents its Codex integration for this version and later.
 const MIN_VERSION: (u64, u64) = (0, 164);
@@ -25,8 +30,9 @@ const AUTH_SIGNS: [&str; 4] = ["status 401", "status 403", "unauthorized", "api 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codex {
     bin: String,
+    provider: CodexProvider,
     model: String,
-    /// The lane's own `CODEX_HOME`; the user's `~/.codex` is never used.
+    /// The lane's own `CODEX_HOME` (DeepSeek only); `~/.codex` is used for OpenAI.
     home: PathBuf,
 }
 
@@ -35,16 +41,23 @@ impl Codex {
     pub fn new(name: &str, lane: &Lane, data_home: &Path) -> Codex {
         Codex {
             bin: lane.bin.clone(),
+            provider: lane.provider.unwrap_or(CodexProvider::Deepseek),
             model: lane.model.clone().unwrap_or_default(),
             home: data_home.join("onerig").join("codex").join(name),
         }
     }
 
     fn command(&self, args: &[&str]) -> Spawn {
+        let env_set = match self.provider {
+            CodexProvider::Deepseek => {
+                vec![("CODEX_HOME".to_string(), self.home.display().to_string())]
+            }
+            CodexProvider::Openai => Vec::new(),
+        };
         Spawn {
             program: self.bin.clone().into(),
             args: args.iter().map(|a| a.to_string()).collect(),
-            env_set: vec![("CODEX_HOME".to_string(), self.home.display().to_string())],
+            env_set,
             ..Spawn::default()
         }
     }
@@ -67,16 +80,18 @@ impl Codex {
 
 impl Adapter for Codex {
     fn probe_spawns(&self) -> Vec<Spawn> {
-        // The key is checked by the shell without printing it.
-        let key_check = format!("[ -n \"${KEY_VARIABLE}\" ]");
+        let auth = match self.provider {
+            CodexProvider::Deepseek => Spawn {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), format!("[ -n \"${KEY_VARIABLE}\" ]")],
+                ..Spawn::default()
+            },
+            CodexProvider::Openai => self.command(&["login", "status"]),
+        };
         vec![
             self.command(&["--version"]),
             self.command(&["exec", "--help"]),
-            Spawn {
-                program: "/bin/sh".into(),
-                args: vec!["-c".into(), key_check],
-                ..Spawn::default()
-            },
+            auth,
         ]
     }
 
@@ -100,9 +115,15 @@ impl Adapter for Codex {
             )));
         }
         if key.exit_code != Some(0) {
-            return Err(ProbeError::NotLoggedIn(format!(
-                "{KEY_VARIABLE} is not set; export it in the shell that runs onerig"
-            )));
+            let msg = match self.provider {
+                CodexProvider::Deepseek => {
+                    format!("{KEY_VARIABLE} is not set; export it in the shell that runs onerig")
+                }
+                CodexProvider::Openai => {
+                    format!("Codex is not logged in; run `{} login`", self.bin)
+                }
+            };
+            return Err(ProbeError::NotLoggedIn(msg));
         }
         Ok(Probe { version: line })
     }
@@ -116,21 +137,42 @@ impl Adapter for Codex {
     }
 
     fn spawn(&self, job: &Job) -> Spawn {
-        let args = [
-            "exec",
-            "--json",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
-            "--model",
-            &self.model,
-            "-",
+        let sandbox = match job.role {
+            Role::Worker => "workspace-write",
+            Role::Planner | Role::Reviewer => "read-only",
+        };
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "--skip-git-repo-check".to_string(),
         ];
-        Spawn {
-            stdin: Some(job.prompt.clone()),
-            files: vec![(self.home.join("config.toml"), self.config_toml())],
-            ..self.command(&args)
+        if self.provider == CodexProvider::Openai {
+            args.extend([
+                "--ignore-user-config".to_string(),
+                "--ephemeral".to_string(),
+            ]);
         }
+        args.extend([
+            "--sandbox".to_string(),
+            sandbox.to_string(),
+            "--model".to_string(),
+            self.model.clone(),
+        ]);
+        let mut files = Vec::new();
+        if self.provider == CodexProvider::Deepseek {
+            files.push((self.home.join("config.toml"), self.config_toml()));
+        }
+        if let (CodexProvider::Openai, Some(schema)) = (self.provider, job.schema) {
+            let path = schema_file_path(job);
+            args.extend(["--output-schema".to_string(), path.display().to_string()]);
+            files.push((path, schema.to_string()));
+        }
+        args.push("-".to_string());
+        let mut spawn = self.command(&[]);
+        spawn.args = args;
+        spawn.stdin = Some(prompt_for_job(self.provider, job));
+        spawn.files = files;
+        spawn
     }
 
     fn parse(&self, line: &str) -> Vec<HarnessEvent> {
@@ -147,22 +189,52 @@ impl Adapter for Codex {
         event.into_iter().collect()
     }
 
-    fn outcome(&self, _job: &Job, output: &Output) -> Outcome {
-        let lines: Vec<Value> = output
-            .stdout
-            .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
+    fn outcome(&self, job: &Job, output: &Output) -> Outcome {
+        let lines = json_lines(&output.stdout);
         if lines.iter().any(|v| v["type"] == "turn.completed") {
-            return Outcome::Done {
-                text: last_message(&lines),
-                structured: None,
-            };
+            let text = last_message(&lines);
+            return structured_or_done(job, text);
         }
-        match final_error(&lines) {
-            Some(message) => classify(message),
-            None => without_turn(output),
-        }
+        let message = final_error(&lines)
+            .unwrap_or_else(|| exit_message("codex ended without finishing its turn", output));
+        classify_error_text(&QUOTA_SIGNS, &AUTH_SIGNS, message)
+    }
+}
+
+fn schema_file_path(job: &Job) -> PathBuf {
+    let stem = job
+        .raw_log
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("job");
+    job.run_dir.join(format!("{stem}.schema.json"))
+}
+
+fn prompt_for_job(provider: CodexProvider, job: &Job) -> String {
+    let mut prompt = prepend_role(job.role, &job.prompt);
+    if let (CodexProvider::Deepseek, Some(schema)) = (provider, job.schema) {
+        prompt.push_str("\n\nAnswer with ONLY a JSON object matching this JSON Schema:\n");
+        prompt.push_str(schema);
+    }
+    prompt
+}
+
+fn structured_or_done(job: &Job, text: String) -> Outcome {
+    if job.schema.is_none() {
+        return Outcome::Done {
+            text,
+            structured: None,
+        };
+    }
+    match extract_json_object(&text) {
+        Some(value) => Outcome::Done {
+            text,
+            structured: Some(value),
+        },
+        None => Outcome::failed(
+            FailureKind::Unknown,
+            "codex gave no structured answer".to_string(),
+        ),
     }
 }
 
@@ -226,31 +298,6 @@ fn final_error(lines: &[Value]) -> Option<String> {
     failed_turn.or_else(last_error).map(str::to_string)
 }
 
-fn without_turn(output: &Output) -> Outcome {
-    let exit = output
-        .exit_code
-        .map_or("a signal".to_string(), |code| format!("exit code {code}"));
-    let tail = output.stderr_tail.trim();
-    let message = if tail.is_empty() {
-        format!("codex ended without finishing its turn ({exit})")
-    } else {
-        format!("codex ended without finishing its turn ({exit}): {tail}")
-    };
-    classify(message)
-}
-
-fn classify(message: String) -> Outcome {
-    let lower = message.to_lowercase();
-    let kind = if QUOTA_SIGNS.iter().any(|sign| lower.contains(sign)) {
-        FailureKind::Quota
-    } else if AUTH_SIGNS.iter().any(|sign| lower.contains(sign)) {
-        FailureKind::Auth
-    } else {
-        FailureKind::Unknown
-    };
-    Outcome::failed(kind, message)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,11 +308,12 @@ mod tests {
     const TASK: &str = include_str!("../../tests/fixtures/codex/deepseek-task.jsonl");
     const AUTH: &str = include_str!("../../tests/fixtures/codex/deepseek-auth-failure.jsonl");
 
-    fn codex() -> Codex {
+    fn codex_with(provider: CodexProvider, model: &str) -> Codex {
         let lane = Lane {
             harness: HarnessKind::Codex,
             bin: "codex".into(),
-            model: Some("deepseek-flash".into()),
+            provider: Some(provider),
+            model: Some(model.into()),
             effort: Effort::Medium,
             mode: Mode::Direct,
             quota_group: None,
@@ -273,6 +321,10 @@ mod tests {
             script: None,
         };
         Codex::new("deepseek", &lane, Path::new("/data"))
+    }
+
+    fn codex() -> Codex {
+        codex_with(CodexProvider::Deepseek, "deepseek-flash")
     }
 
     fn job() -> Job {
@@ -457,5 +509,102 @@ mod tests {
         assert_eq!(parse_version("1.2"), Some((1, 2)));
         assert_eq!(parse_version(""), None);
         assert_eq!(parse_version("codex x.y"), None);
+    }
+
+    #[test]
+    fn openai_provider_uses_default_codex_home_and_login_status() {
+        let adapter = codex_with(CodexProvider::Openai, "gpt-5.4");
+        let probes = adapter.probe_spawns();
+
+        assert_eq!(probes[2].program, PathBuf::from("codex"));
+        assert_eq!(probes[2].args, ["login", "status"]);
+        assert!(probes[2].env_set.is_empty());
+        assert!(matches!(
+            adapter.probe_result(&probe("codex-cli 0.171.0", "--json", 1)),
+            Err(ProbeError::NotLoggedIn(m)) if m.contains("codex login")
+        ));
+    }
+
+    #[test]
+    fn planner_role_uses_read_only_sandbox_and_schema_per_provider() {
+        let schema = r#"{"type":"object"}"#;
+        let planner_job = Job {
+            role: Role::Planner,
+            schema: Some(schema),
+            ..job()
+        };
+
+        let openai_spawn = codex_with(CodexProvider::Openai, "gpt-5.4").spawn(&planner_job);
+        let deepseek_spawn = codex().spawn(&planner_job);
+
+        assert!(openai_spawn.env_set.is_empty());
+        assert!(
+            openai_spawn
+                .args
+                .contains(&"--ignore-user-config".to_string())
+        );
+        assert!(openai_spawn.args.contains(&"--ephemeral".to_string()));
+        assert!(openai_spawn.args.contains(&"read-only".to_string()));
+        assert!(openai_spawn.args.contains(&"--output-schema".to_string()));
+        assert_eq!(
+            openai_spawn.files[0].0,
+            PathBuf::from("/r/raw-1.schema.json")
+        );
+        assert_eq!(openai_spawn.files[0].1, schema);
+        assert!(
+            openai_spawn
+                .stdin
+                .as_deref()
+                .unwrap()
+                .starts_with("You are the planner")
+        );
+
+        assert!(deepseek_spawn.args.contains(&"read-only".to_string()));
+        assert!(
+            deepseek_spawn
+                .stdin
+                .as_deref()
+                .unwrap()
+                .contains("JSON Schema")
+        );
+    }
+
+    #[test]
+    fn schema_outcome_extracts_json_or_fails_unknown() {
+        let schema_job = Job {
+            role: Role::Planner,
+            schema: Some(r#"{"type":"object"}"#),
+            ..job()
+        };
+        let valid = [
+            json!({"type":"item.completed","item":{"type":"agent_message","text":"```json\n{\"tasks\":[]}\n```"}}).to_string(),
+            json!({"type":"item.completed","item":{"type":"command_execution","command":"ls"}}).to_string(),
+            json!({"type":"turn.completed"}).to_string(),
+        ]
+        .join("\n");
+        let invalid = [
+            json!({"type":"item.completed","item":{"type":"agent_message","text":"no json"}})
+                .to_string(),
+            json!({"type":"turn.completed"}).to_string(),
+        ]
+        .join("\n");
+
+        let ok = codex().outcome(&schema_job, &output(&valid, Some(0)));
+        let bad = codex().outcome(&schema_job, &output(&invalid, Some(0)));
+
+        assert_eq!(
+            ok,
+            Outcome::Done {
+                text: "```json\n{\"tasks\":[]}\n```".into(),
+                structured: Some(json!({"tasks": []})),
+            }
+        );
+        assert!(matches!(
+            bad,
+            Outcome::Failed {
+                kind: FailureKind::Unknown,
+                ..
+            }
+        ));
     }
 }

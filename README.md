@@ -49,7 +49,7 @@ worker   = ["gemini", "deepseek"]   # the order is the fail-over order
 
 [lanes.plan]
 harness = "claude"
-model = "sonnet"
+model = "opus"
 
 [lanes.review]
 harness = "claude"

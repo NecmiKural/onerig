@@ -3,9 +3,8 @@
 
 use serde_json::Value;
 
-use super::{Adapter, Output, Spawn};
+use super::{Adapter, Output, Spawn, exit_message, json_lines, role_prompt};
 use crate::config::{Effort, Lane};
-use crate::prompt::{PLANNER_ROLE, REVIEWER_ROLE};
 use crate::runner::{
     FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Role,
 };
@@ -63,14 +62,6 @@ fn effort_word(effort: Effort) -> &'static str {
         Effort::Low => "low",
         Effort::Medium => "medium",
         Effort::High => "high",
-    }
-}
-
-fn role_prompt(role: Role) -> Option<&'static str> {
-    match role {
-        Role::Planner => Some(PLANNER_ROLE),
-        Role::Reviewer => Some(REVIEWER_ROLE),
-        Role::Worker => None,
     }
 }
 
@@ -136,14 +127,30 @@ impl Adapter for Claude {
         if let Some(role) = role_prompt(job.role) {
             args.extend(["--append-system-prompt", role]);
         }
-        args.extend([
-            "--tools",
-            "Read",
-            "Glob",
-            "Grep",
-            "--disallowedTools",
-            "AskUserQuestion",
-        ]);
+        match job.role {
+            Role::Planner | Role::Reviewer => {
+                args.extend(["--tools", "Read", "Glob", "Grep"]);
+            }
+            Role::Worker => {
+                args.extend([
+                    "--tools",
+                    "Read",
+                    "Edit",
+                    "Write",
+                    "Glob",
+                    "Grep",
+                    "Bash",
+                    "--allowedTools",
+                    "Read",
+                    "Edit",
+                    "Write",
+                    "Glob",
+                    "Grep",
+                    "Bash",
+                ]);
+            }
+        }
+        args.extend(["--disallowedTools", "AskUserQuestion"]);
         Spawn {
             stdin: Some(job.prompt.clone()),
             ..self.command(&args)
@@ -164,17 +171,13 @@ impl Adapter for Claude {
     }
 
     fn outcome(&self, job: &Job, output: &Output) -> Outcome {
-        let lines: Vec<Value> = output
-            .stdout
-            .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let lines = json_lines(&output.stdout);
         if let Some(outcome) = rejected_limit(&lines) {
             return outcome;
         }
         match lines.iter().rev().find(|v| v["type"] == "result") {
             Some(result) => from_result(job, result),
-            None => without_result(output),
+            None => classify_message(exit_message("claude ended without a result", output)),
         }
     }
 }
@@ -246,19 +249,6 @@ fn from_result(job: &Job, result: &Value) -> Outcome {
     classify_message(message)
 }
 
-fn without_result(output: &Output) -> Outcome {
-    let tail = output.stderr_tail.trim();
-    let exit = output
-        .exit_code
-        .map_or("a signal".to_string(), |code| format!("exit code {code}"));
-    let message = if tail.is_empty() {
-        format!("claude ended without a result ({exit})")
-    } else {
-        format!("claude ended without a result ({exit}): {tail}")
-    };
-    classify_message(message)
-}
-
 fn classify_message(message: String) -> Outcome {
     let lower = message.to_lowercase();
     if AUTH_SIGNS.iter().any(|sign| lower.contains(sign)) {
@@ -287,6 +277,7 @@ mod tests {
         Claude::new(&Lane {
             harness: HarnessKind::Claude,
             bin: "claude".into(),
+            provider: None,
             model: Some("sonnet".into()),
             effort: Effort::Low,
             mode: Mode::Direct,
@@ -350,6 +341,9 @@ mod tests {
                 .iter()
                 .any(|a| a == "--json-schema" || a == "--append-system-prompt")
         );
+        let args = spawn.args.join(" ");
+        assert!(args.contains("--tools Read Edit Write Glob Grep Bash"));
+        assert!(args.contains("--allowedTools Read Edit Write Glob Grep Bash"));
     }
 
     #[test]

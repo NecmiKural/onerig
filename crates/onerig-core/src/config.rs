@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::plan::is_valid_id;
+use crate::store::write_text_atomically;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -59,7 +60,8 @@ impl HarnessKind {
 }
 
 /// How an `agy` lane is driven. Lanes of every other harness are always `Direct`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Mode {
     Off,
     /// A human runs the harness; onerig starts no process for this lane.
@@ -67,7 +69,15 @@ pub enum Mode {
     Direct,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexProvider {
+    Deepseek,
+    Openai,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Effort {
     Low,
     Medium,
@@ -79,6 +89,8 @@ pub struct Lane {
     pub harness: HarnessKind,
     /// Binary name or path; defaults to the harness's usual name.
     pub bin: String,
+    /// Provider for `Codex` lanes (`None` on other harnesses).
+    pub provider: Option<CodexProvider>,
     /// Required for every harness except `Fake`.
     pub model: Option<String>,
     pub effort: Effort,
@@ -116,7 +128,7 @@ reviewer = ["review"]
 
 [lanes.plan]
 harness = "claude"
-model = "sonnet"
+model = "opus"
 effort = "medium"
 
 [lanes.review]
@@ -142,6 +154,8 @@ pub enum ConfigError {
     Missing(PathBuf),
     #[error("cannot read {}: {message}", path.display())]
     Unreadable { path: PathBuf, message: String },
+    #[error("cannot write {}: {message}", path.display())]
+    Unwritable { path: PathBuf, message: String },
     #[error("the configuration is not valid TOML of the expected shape: {0}")]
     Syntax(String),
     #[error("{key}: {problem}")]
@@ -250,6 +264,7 @@ struct RawRoles {
 struct RawLane {
     harness: String,
     bin: Option<String>,
+    provider: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     mode: Option<String>,
@@ -307,12 +322,22 @@ fn lane_from(name: &str, raw: &RawLane, allow_fake: bool) -> Result<Lane, Config
     check_keys_apply(name, raw, harness)?;
     let mode = mode_of(name, raw, harness)?;
     check_direct_agy(name, raw, harness, mode)?;
+    build_lane(name, raw, harness, mode)
+}
+
+fn build_lane(
+    name: &str,
+    raw: &RawLane,
+    harness: HarnessKind,
+    mode: Mode,
+) -> Result<Lane, ConfigError> {
     Ok(Lane {
         harness,
         bin: raw
             .bin
             .clone()
             .unwrap_or_else(|| harness.name().to_string()),
+        provider: provider_of(name, raw, harness)?,
         model: required(
             name,
             "model",
@@ -349,7 +374,8 @@ fn harness_kind(name: &str, text: &str, allow_fake: bool) -> Result<HarnessKind,
 
 fn check_keys_apply(name: &str, raw: &RawLane, harness: HarnessKind) -> Result<(), ConfigError> {
     use HarnessKind::{Agy, Claude, Codex, Fake};
-    let rules: [(&str, bool, &[HarnessKind]); 6] = [
+    let rules: [(&str, bool, &[HarnessKind]); 7] = [
+        ("provider", raw.provider.is_some(), &[Codex]),
         ("model", raw.model.is_some(), &[Claude, Agy, Codex]),
         ("effort", raw.effort.is_some(), &[Claude]),
         ("mode", raw.mode.is_some(), &[Agy]),
@@ -370,6 +396,24 @@ fn check_keys_apply(name: &str, raw: &RawLane, harness: HarnessKind) -> Result<(
             format!("does not apply to a {} lane", harness.name()),
         )),
         None => Ok(()),
+    }
+}
+
+fn provider_of(
+    name: &str,
+    raw: &RawLane,
+    harness: HarnessKind,
+) -> Result<Option<CodexProvider>, ConfigError> {
+    if harness != HarnessKind::Codex {
+        return Ok(None);
+    }
+    match raw.provider.as_deref().unwrap_or("deepseek") {
+        "deepseek" => Ok(Some(CodexProvider::Deepseek)),
+        "openai" => Ok(Some(CodexProvider::Openai)),
+        _ => Err(invalid(
+            format!("lanes.{name}.provider"),
+            "use deepseek or openai",
+        )),
     }
 }
 
@@ -459,8 +503,13 @@ fn single_lane(
         return Err(invalid(key, "name exactly one lane"));
     };
     let lane = existing(key, name, lanes)?;
-    if !matches!(lane.harness, HarnessKind::Claude | HarnessKind::Fake) {
-        return Err(invalid(key, format!("lane {name} must use harness claude")));
+    if lane.is_off() || lane.is_manual() {
+        return Err(invalid(
+            key,
+            format!(
+                "lane {name} is manual or off; planner and reviewer lanes must run automatically"
+            ),
+        ));
     }
     Ok(name.clone())
 }
@@ -477,18 +526,131 @@ fn worker_lanes(
         if names[..index].contains(name) {
             return Err(invalid(KEY, format!("lane {name} is named twice")));
         }
-        let lane = existing(KEY, name, lanes)?;
-        if lane.harness == HarnessKind::Claude {
-            return Err(invalid(
-                KEY,
-                format!("lane {name} must use harness codex or agy"),
-            ));
-        }
+        let _ = existing(KEY, name, lanes)?;
     }
     if names.iter().all(|name| lanes[name].is_off()) {
         return Err(invalid(KEY, "at least one worker lane must not be off"));
     }
     Ok(names.to_vec())
+}
+
+/// Formats `config` as TOML that round-trips cleanly through `parse`.
+pub fn to_toml(config: &Config) -> String {
+    let out = OutConfig {
+        run: OutRun {
+            max_attempts: config.run.max_attempts,
+            idle_timeout: format_duration(config.run.idle_timeout),
+            job_timeout: format_duration(config.run.job_timeout),
+        },
+        policy: OutPolicy {
+            min_remaining: config.policy.min_remaining,
+        },
+        roles: OutRoles {
+            planner: [&config.roles.planner],
+            reviewer: [&config.roles.reviewer],
+            worker: &config.roles.worker,
+        },
+        lanes: config
+            .lanes
+            .iter()
+            .map(|(name, lane)| (name.clone(), out_lane(lane)))
+            .collect(),
+    };
+    toml::to_string_pretty(&out).unwrap_or_default()
+}
+
+/// Writes `config` atomically to `path`, creating parent directories as needed.
+pub fn save(path: &Path, config: &Config) -> Result<(), ConfigError> {
+    let err = |e: std::io::Error| ConfigError::Unwritable {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    };
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(err)?;
+    }
+    write_text_atomically(path, &to_toml(config)).map_err(err)
+}
+
+#[derive(Serialize)]
+struct OutConfig<'a> {
+    run: OutRun,
+    policy: OutPolicy,
+    roles: OutRoles<'a>,
+    lanes: BTreeMap<String, OutLane<'a>>,
+}
+
+#[derive(Serialize)]
+struct OutRun {
+    max_attempts: u32,
+    idle_timeout: String,
+    job_timeout: String,
+}
+
+#[derive(Serialize)]
+struct OutPolicy {
+    min_remaining: f64,
+}
+
+#[derive(Serialize)]
+struct OutRoles<'a> {
+    planner: [&'a String; 1],
+    reviewer: [&'a String; 1],
+    worker: &'a [String],
+}
+
+#[derive(Serialize)]
+struct OutLane<'a> {
+    harness: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bin: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<CodexProvider>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<Effort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<Mode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quota_group: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accept_vendor_terms_risk: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    script: Option<String>,
+}
+
+fn out_lane(lane: &Lane) -> OutLane<'_> {
+    let custom_bin = (lane.bin != lane.harness.name()).then_some(lane.bin.as_str());
+    let is = |kind| lane.harness == kind;
+    OutLane {
+        harness: lane.harness.name(),
+        bin: custom_bin,
+        provider: lane.provider.filter(|_| is(HarnessKind::Codex)),
+        model: (!is(HarnessKind::Fake))
+            .then_some(lane.model.as_deref())
+            .flatten(),
+        effort: is(HarnessKind::Claude).then_some(lane.effort),
+        mode: is(HarnessKind::Agy).then_some(lane.mode),
+        quota_group: is(HarnessKind::Agy)
+            .then_some(lane.quota_group.as_deref())
+            .flatten(),
+        accept_vendor_terms_risk: (is(HarnessKind::Agy) && lane.accept_vendor_terms_risk)
+            .then_some(true),
+        script: is(HarnessKind::Fake)
+            .then(|| lane.script.as_ref().map(|p| p.display().to_string()))
+            .flatten(),
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3600 && secs.is_multiple_of(3600) {
+        format!("{}h", secs / 3600)
+    } else if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 #[cfg(test)]
@@ -540,9 +702,14 @@ model = "deepseek-flash"
         let config = parse(EXAMPLE, false).unwrap();
 
         assert_eq!(config.roles.worker, ["gemini", "deepseek"]);
+        assert_eq!(config.lanes["plan"].model.as_deref(), Some("opus"));
         assert_eq!(config.lanes["gemini"].mode, Mode::Handover);
         assert!(config.lanes["gemini"].is_manual());
         assert_eq!(config.lanes["deepseek"].mode, Mode::Direct);
+        assert_eq!(
+            config.lanes["deepseek"].provider,
+            Some(CodexProvider::Deepseek)
+        );
         assert_eq!(config.lanes["review"].effort, Effort::Low);
     }
 
@@ -667,6 +834,12 @@ model = "deepseek-flash"
             invalid_key(&with("script = \"s.json\"")),
             "lanes.deepseek.script"
         );
+        assert_eq!(
+            invalid_key(&with(
+                "\n[lanes.other]\nharness = \"claude\"\nmodel = \"opus\"\nprovider = \"openai\""
+            )),
+            "lanes.other.provider"
+        );
     }
 
     #[test]
@@ -754,19 +927,35 @@ script = "s.json"
     }
 
     #[test]
-    fn planner_and_reviewer_name_exactly_one_existing_claude_lane() {
+    fn planner_and_reviewer_accept_any_automatic_lane_and_reject_manual_or_off() {
         let two = BASE.replace(r#"planner = ["plan"]"#, r#"planner = ["plan", "review"]"#);
         let unknown = BASE.replace(r#"reviewer = ["review"]"#, r#"reviewer = ["nobody"]"#);
         let worker_as_reviewer =
             BASE.replace(r#"reviewer = ["review"]"#, r#"reviewer = ["deepseek"]"#);
+        let manual_planner =
+            with_gemini("").replace(r#"planner = ["plan"]"#, r#"planner = ["gemini"]"#);
+        let off_reviewer = with_gemini("mode = \"off\"")
+            .replace(r#"reviewer = ["review"]"#, r#"reviewer = ["gemini"]"#);
+        let direct_agy_planner =
+            with_gemini("mode = \"direct\"\nquota_group = \"G\"\naccept_vendor_terms_risk = true")
+                .replace(r#"planner = ["plan"]"#, r#"planner = ["gemini"]"#);
 
         assert_eq!(invalid_key(&two), "roles.planner");
         assert_eq!(invalid_key(&unknown), "roles.reviewer");
-        assert_eq!(invalid_key(&worker_as_reviewer), "roles.reviewer");
+        assert_eq!(
+            parse(&worker_as_reviewer, false).unwrap().roles.reviewer,
+            "deepseek"
+        );
+        assert_eq!(invalid_key(&manual_planner), "roles.planner");
+        assert_eq!(invalid_key(&off_reviewer), "roles.reviewer");
+        assert_eq!(
+            parse(&direct_agy_planner, false).unwrap().roles.planner,
+            "gemini"
+        );
     }
 
     #[test]
-    fn the_worker_chain_has_distinct_worker_lanes_and_one_not_off() {
+    fn the_worker_chain_accepts_any_distinct_lanes_with_one_not_off() {
         let empty = BASE.replace(r#"worker = ["deepseek"]"#, "worker = []");
         let twice = BASE.replace(
             r#"worker = ["deepseek"]"#,
@@ -778,9 +967,63 @@ script = "s.json"
             r#"worker = ["gemini"]"#,
         );
 
-        for text in [empty, twice, claude, all_off] {
+        for text in [empty, twice, all_off] {
             assert_eq!(invalid_key(&text), "roles.worker");
         }
+        assert_eq!(parse(&claude, false).unwrap().roles.worker, ["plan"]);
+    }
+
+    #[test]
+    fn codex_provider_defaults_to_deepseek_and_accepts_openai() {
+        let openai =
+            with("\n[lanes.gpt]\nharness = \"codex\"\nprovider = \"openai\"\nmodel = \"gpt-5.4\"")
+                .replace(
+                    r#"worker = ["deepseek"]"#,
+                    r#"worker = ["deepseek", "gpt"]"#,
+                );
+        let bad = with("provider = \"anthropic\"");
+
+        let config = parse(&openai, false).unwrap();
+
+        assert_eq!(
+            config.lanes["deepseek"].provider,
+            Some(CodexProvider::Deepseek)
+        );
+        assert_eq!(config.lanes["gpt"].provider, Some(CodexProvider::Openai));
+        assert_eq!(invalid_key(&bad), "lanes.deepseek.provider");
+    }
+
+    #[test]
+    fn to_toml_and_save_round_trip_every_harness_cleanly() {
+        let mut config = parse(EXAMPLE, false).unwrap();
+        config.run.idle_timeout = Duration::from_secs(3600);
+        config.run.job_timeout = Duration::from_secs(61);
+        let openai_lane = Lane {
+            harness: HarnessKind::Codex,
+            bin: "/usr/local/bin/codex".into(),
+            provider: Some(CodexProvider::Openai),
+            model: Some("gpt-5.4".into()),
+            effort: Effort::Medium,
+            mode: Mode::Direct,
+            quota_group: None,
+            accept_vendor_terms_risk: false,
+            script: None,
+        };
+        config.lanes.insert("openai".into(), openai_lane);
+        config.roles.worker.push("openai".into());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("config.toml");
+        save(&path, &config).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("idle_timeout = \"1h\""));
+        assert!(text.contains("job_timeout = \"61s\""));
+        assert!(!text.contains("bin = \"codex\""));
+        let reloaded = load(&path, false).unwrap();
+
+        assert_eq!(reloaded, config);
+        assert_eq!(format_duration(Duration::from_secs(3601)), "3601s");
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m");
     }
 
     #[test]

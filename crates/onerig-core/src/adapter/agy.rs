@@ -8,9 +8,14 @@
 
 use serde_json::Value;
 
-use super::{Adapter, Output, Spawn};
+use super::{
+    Adapter, Output, Spawn, classify_error_text, exit_message, extract_json_object, json_lines,
+    prepend_role,
+};
 use crate::config::Lane;
-use crate::runner::{FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport};
+use crate::runner::{
+    FailureKind, HarnessEvent, Job, Outcome, Probe, ProbeError, QuotaReport, Role,
+};
 use crate::store::parse_utc_ms;
 
 /// Exit code 3, typed error lines and `finished_reason` arrived in this version.
@@ -99,10 +104,9 @@ impl Adapter for Agy {
                 self.bin
             )));
         }
-        let listed = models
-            .stdout
-            .iter()
-            .any(|l| l.split_whitespace().next() == Some(self.model.as_str()));
+        let listed = parse_models(&models.stdout)
+            .into_iter()
+            .any(|(id, _)| id == self.model);
         if !listed {
             return Err(ProbeError::Unsupported(format!(
                 "model {} is not offered to this account; see `{} models`",
@@ -141,22 +145,33 @@ impl Adapter for Agy {
         })
     }
 
-    /// Headless runs cannot answer approval prompts, so permissions are
+    /// Headless runs cannot answer approval prompts, so worker permissions are
     /// granted and `--sandbox` restricts what the terminal tool can reach.
+    /// Planner and reviewer runs use `--mode plan --sandbox` without write permissions.
     fn spawn(&self, job: &Job) -> Spawn {
-        let args = [
-            "-p",
-            &job.prompt,
-            "--dangerously-skip-permissions",
-            "--sandbox",
-            "--output-format",
-            "stream-json",
-            "--model",
-            &self.model,
-            "--print-timeout",
-            "30m",
-        ];
-        self.command(&args)
+        let prompt = prepend_role(job.role, &job.prompt);
+        let mut args = vec!["-p".to_string(), prompt];
+        match job.role {
+            Role::Worker => args.push("--dangerously-skip-permissions".to_string()),
+            Role::Planner | Role::Reviewer => {
+                args.extend(["--mode".to_string(), "plan".to_string()])
+            }
+        }
+        args.extend([
+            "--sandbox".to_string(),
+            "--output-format".to_string(),
+            "stream-json".to_string(),
+            "--model".to_string(),
+            self.model.clone(),
+            "--print-timeout".to_string(),
+            "30m".to_string(),
+        ]);
+        if let (Role::Planner | Role::Reviewer, Some(schema)) = (job.role, job.schema) {
+            args.extend(["--json-schema".to_string(), schema.to_string()]);
+        }
+        let mut spawn = self.command(&[]);
+        spawn.args = args;
+        spawn
     }
 
     fn parse(&self, line: &str) -> Vec<HarnessEvent> {
@@ -173,28 +188,44 @@ impl Adapter for Agy {
         event.into_iter().collect()
     }
 
-    fn outcome(&self, _job: &Job, output: &Output) -> Outcome {
+    fn outcome(&self, job: &Job, output: &Output) -> Outcome {
         if let Some(error) = typed_error(&output.stderr_tail) {
             return error;
         }
-        let lines: Vec<Value> = output
-            .stdout
-            .iter()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let lines = json_lines(&output.stdout);
         match lines.iter().rev().find(|v| v["event"] == "result") {
-            Some(event) => from_result(output.exit_code, &event["result"]),
-            None => {
-                let exit = output
-                    .exit_code
-                    .map_or("a signal".to_string(), |c| format!("exit code {c}"));
-                classify(format!(
-                    "agy ended without a result ({exit}): {}",
-                    output.stderr_tail.trim()
-                ))
-            }
+            Some(event) => from_result(job, output.exit_code, &event["result"]),
+            None => classify(exit_message("agy ended without a result", output)),
         }
     }
+}
+
+/// Parses `agy models` stdout lines into `(model_id, display_name)` pairs.
+pub fn parse_models(stdout: &[String]) -> Vec<(String, String)> {
+    stdout
+        .iter()
+        .filter_map(|raw| {
+            let line = raw.rsplit('\r').next().unwrap_or(raw).trim();
+            let mut parts = line.splitn(2, char::is_whitespace);
+            let id = parts.next()?.trim();
+            if !is_model_id(id) {
+                return None;
+            }
+            let label = parts
+                .next()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(id);
+            Some((id.to_string(), label.to_string()))
+        })
+        .collect()
+}
+
+fn is_model_id(id: &str) -> bool {
+    id.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && id.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'.' | b'_')
+        })
 }
 
 /// `agy --version` prints `1.5.14`.
@@ -248,15 +279,33 @@ fn typed_error(stderr: &str) -> Option<Outcome> {
 
 /// A success also needs a clean exit and no refused or unfinished actions,
 /// since agy can report success with tools denied.
-fn from_result(exit_code: Option<i32>, result: &Value) -> Outcome {
+fn from_result(job: &Job, exit_code: Option<i32>, result: &Value) -> Outcome {
     let denied = result["denied_actions"]
         .as_array()
         .is_some_and(|a| !a.is_empty());
     let unfinished = !result["finished_reason"].is_null();
     if exit_code == Some(0) && result["status"] == "SUCCESS" && !denied && !unfinished {
-        return Outcome::Done {
-            text: result["response"].as_str().unwrap_or_default().to_string(),
-            structured: None,
+        let text = result["response"].as_str().unwrap_or_default().to_string();
+        if job.schema.is_none() {
+            return Outcome::Done {
+                text,
+                structured: None,
+            };
+        }
+        let structured = result
+            .get("structured_output")
+            .filter(|v| v.is_object())
+            .cloned()
+            .or_else(|| extract_json_object(&text));
+        return match structured {
+            Some(value) => Outcome::Done {
+                text,
+                structured: Some(value),
+            },
+            None => Outcome::failed(
+                FailureKind::Unknown,
+                "agy gave no structured answer".to_string(),
+            ),
         };
     }
     classify(failure_message(result, denied, unfinished))
@@ -278,15 +327,7 @@ fn failure_message(result: &Value, denied: bool, unfinished: bool) -> String {
 }
 
 fn classify(message: String) -> Outcome {
-    let lower = message.to_lowercase();
-    let kind = if QUOTA_SIGNS.iter().any(|sign| lower.contains(sign)) {
-        FailureKind::Quota
-    } else if AUTH_SIGNS.iter().any(|sign| lower.contains(sign)) {
-        FailureKind::Auth
-    } else {
-        FailureKind::Unknown
-    };
-    Outcome::failed(kind, message)
+    classify_error_text(&QUOTA_SIGNS, &AUTH_SIGNS, message)
 }
 
 #[cfg(test)]
@@ -302,6 +343,7 @@ mod tests {
         Agy::new(&Lane {
             harness: HarnessKind::Agy,
             bin: "agy".into(),
+            provider: None,
             model: Some("gemini-4-hydrogen-medium".into()),
             effort: Effort::Medium,
             mode: Mode::Direct,
@@ -593,5 +635,76 @@ mod tests {
         assert_eq!(parse_version("1.5.14"), Some((1, 5, 14)));
         assert_eq!(parse_version("agy 2.0.0"), Some((2, 0, 0)));
         assert_eq!(parse_version("1.5"), None);
+    }
+
+    #[test]
+    fn parse_models_handles_spinner_prefixes_and_labels() {
+        let lines = vec![
+            "\r⠋ Fetching available models...\rgemini-4-carbon-high    Gemini 4 Carbon (High)"
+                .into(),
+            "claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)".into(),
+            "Fetching available models...".into(),
+        ];
+
+        assert_eq!(
+            parse_models(&lines),
+            [
+                (
+                    "gemini-4-carbon-high".into(),
+                    "Gemini 4 Carbon (High)".into()
+                ),
+                (
+                    "claude-sonnet-5-5-medium".into(),
+                    "Claude Sonnet 5.5 (Medium)".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn planner_and_reviewer_use_plan_mode_and_extract_structured_output() {
+        let planner_job = Job {
+            role: Role::Planner,
+            schema: Some(r#"{"type":"object"}"#),
+            ..job()
+        };
+
+        let spawn = agy("Gemini Models").spawn(&planner_job);
+        assert!(
+            !spawn
+                .args
+                .contains(&"--dangerously-skip-permissions".to_string())
+        );
+        assert!(spawn.args.contains(&"--mode".to_string()));
+        assert!(spawn.args.contains(&"plan".to_string()));
+        assert!(spawn.args.contains(&"--json-schema".to_string()));
+        assert!(spawn.args[1].starts_with("You are the planner"));
+
+        let from_field = r#"{"event":"result","result":{"status":"SUCCESS","response":"ok","structured_output":{"tasks":[]}}}"#;
+        let from_text =
+            r#"{"event":"result","result":{"status":"SUCCESS","response":"{\"tasks\":[]}"}}"#;
+        let missing = r#"{"event":"result","result":{"status":"SUCCESS","response":"plain text"}}"#;
+
+        assert!(matches!(
+            agy("G").outcome(&planner_job, &output(from_field, "", Some(0))),
+            Outcome::Done {
+                structured: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            agy("G").outcome(&planner_job, &output(from_text, "", Some(0))),
+            Outcome::Done {
+                structured: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            agy("G").outcome(&planner_job, &output(missing, "", Some(0))),
+            Outcome::Failed {
+                kind: FailureKind::Unknown,
+                ..
+            }
+        ));
     }
 }

@@ -17,6 +17,14 @@ impl Halt {
         Halt::default()
     }
 
+    /// Shares `quit` with `self` while giving the caller an independent `stop`.
+    pub fn with_shared_quit(&self) -> Halt {
+        Halt {
+            quit: Arc::clone(&self.quit),
+            stop: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// The flag signal handlers set. Nothing clears it.
     pub fn quit_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.quit)
@@ -73,5 +81,20 @@ mod tests {
 
         assert!(halt.is_set());
         assert!(!Halt::new().is_set());
+    }
+
+    #[test]
+    fn shared_quit_isolates_stop_while_forwarding_quit() {
+        let main = Halt::new();
+        let side = main.with_shared_quit();
+
+        main.stop();
+        assert!(main.is_set());
+        assert!(!side.is_set());
+
+        main.clear_stop();
+        main.quit_flag().store(true, Ordering::Relaxed);
+        assert!(main.is_set());
+        assert!(side.is_set());
     }
 }
