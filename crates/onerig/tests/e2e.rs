@@ -288,3 +288,39 @@ fn doctor_reports_every_lane_without_running_anything() {
         ]
     );
 }
+
+#[test]
+fn continue_without_a_session_explains_and_exits_2() {
+    let world = world(vec![]);
+    let output = world
+        .command(env!("CARGO_BIN_EXE_onerig"))
+        .args(["--continue", "--config"])
+        .arg(world.root.join("config.toml"))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no session to continue"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn interactive_chat_without_a_terminal_exits_2() {
+    let world = world(vec![]);
+    let output = world
+        .command(env!("CARGO_BIN_EXE_onerig"))
+        .args(["--config"])
+        .arg(world.root.join("config.toml"))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires a terminal"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

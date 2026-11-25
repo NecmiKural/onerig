@@ -315,17 +315,51 @@ pub enum StoreError {
     Version { path: PathBuf, found: u64 },
 }
 
-fn io_error(path: &Path, error: std::io::Error) -> StoreError {
-    StoreError::Io {
-        path: path.to_path_buf(),
-        message: error.to_string(),
+pub(crate) fn io_error(path: &Path, error: std::io::Error) -> StoreError {
+    build_store_error(true, path, error)
+}
+
+pub(crate) fn format_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
+    build_store_error(false, path, error)
+}
+
+fn build_store_error(is_io: bool, path: &Path, error: impl std::fmt::Display) -> StoreError {
+    let path = path.to_path_buf();
+    let message = error.to_string();
+    if is_io {
+        StoreError::Io { path, message }
+    } else {
+        StoreError::Format { path, message }
     }
 }
 
-fn format_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
-    StoreError::Format {
-        path: path.to_path_buf(),
-        message: error.to_string(),
+pub(crate) fn append_jsonl(path: &Path, value: &impl Serialize) -> Result<(), StoreError> {
+    let line = serde_json::to_string(value).map_err(|e| format_error(path, e))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| io_error(path, e))?;
+    writeln!(file, "{line}").map_err(|e| io_error(path, e))
+}
+
+pub(crate) fn open_dir(path: PathBuf, id: &str) -> Result<PathBuf, StoreError> {
+    if path.is_dir() {
+        Ok(path)
+    } else {
+        Err(StoreError::NoRun(id.to_string()))
+    }
+}
+
+pub(crate) fn create_sub_dir(root: &Path, id: &str) -> Result<PathBuf, StoreError> {
+    std::fs::create_dir_all(root).map_err(|e| io_error(root, e))?;
+    let path = root.join(id);
+    match std::fs::create_dir(&path) {
+        Ok(()) => Ok(path),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(StoreError::Exists(id.to_string()))
+        }
+        Err(e) => Err(io_error(&path, e)),
     }
 }
 
@@ -342,25 +376,13 @@ pub struct RunDir {
 
 impl RunDir {
     pub fn create(repo: &Path, run_id: &str) -> Result<RunDir, StoreError> {
-        let root = runs_root(repo);
-        std::fs::create_dir_all(&root).map_err(|e| io_error(&root, e))?;
-        let path = root.join(run_id);
-        match std::fs::create_dir(&path) {
-            Ok(()) => Ok(RunDir { path }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(StoreError::Exists(run_id.to_string()))
-            }
-            Err(e) => Err(io_error(&path, e)),
-        }
+        let path = create_sub_dir(&runs_root(repo), run_id)?;
+        Ok(RunDir { path })
     }
 
     pub fn open(repo: &Path, run_id: &str) -> Result<RunDir, StoreError> {
-        let path = runs_root(repo).join(run_id);
-        if path.is_dir() {
-            Ok(RunDir { path })
-        } else {
-            Err(StoreError::NoRun(run_id.to_string()))
-        }
+        let path = open_dir(runs_root(repo).join(run_id), run_id)?;
+        Ok(RunDir { path })
     }
 
     pub fn path(&self) -> &Path {
@@ -411,14 +433,11 @@ impl RunDir {
     }
 
     pub fn append_log(&self, record: &LogRecord) -> Result<(), StoreError> {
-        let path = self.path.join("log.jsonl");
-        let line = serde_json::to_string(record).map_err(|e| format_error(&path, e))?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| io_error(&path, e))?;
-        writeln!(file, "{line}").map_err(|e| io_error(&path, e))
+        append_jsonl(&self.path.join("log.jsonl"), record)
+    }
+
+    pub fn read_log(&self) -> Result<Vec<LogRecord>, StoreError> {
+        read_jsonl(&self.path.join("log.jsonl"))
     }
 }
 
@@ -444,6 +463,19 @@ pub(crate) fn write_text_atomically(path: &Path, text: &str) -> std::io::Result<
 fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, StoreError> {
     let text = std::fs::read_to_string(path).map_err(|e| io_error(path, e))?;
     serde_json::from_str(&text).map_err(|e| format_error(path, e))
+}
+
+/// Reads newline-delimited JSON records, returning empty if `path` does not exist.
+pub(crate) fn read_jsonl<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, StoreError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(io_error(path, e)),
+    };
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(|e| format_error(path, e)))
+        .collect()
 }
 
 /// Directory entry names inside `root`, sorted descending; empty if `root` does not exist.
@@ -811,12 +843,14 @@ mod tests {
         dir.append_log(&record(1)).unwrap();
         dir.append_log(&record(2)).unwrap();
 
-        let text = std::fs::read_to_string(dir.path().join("log.jsonl")).unwrap();
-        let lines: Vec<LogRecord> = text
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(lines, [record(1), record(2)]);
+        assert_eq!(dir.read_log().unwrap(), [record(1), record(2)]);
+        assert_eq!(
+            RunDir::create(repo.path(), "r2")
+                .unwrap()
+                .read_log()
+                .unwrap(),
+            []
+        );
     }
 
     #[test]
@@ -998,5 +1032,19 @@ mod tests {
         ] {
             assert_eq!(parse_utc_ms(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn write_text_atomically_normalizes_trailing_newline_and_io_error_is_io_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let no_nl = dir.path().join("a.txt");
+        let has_nl = dir.path().join("b.txt");
+        write_text_atomically(&no_nl, "hi").unwrap();
+        write_text_atomically(&has_nl, "hi\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&no_nl).unwrap(), "hi\n");
+        assert_eq!(std::fs::read_to_string(&has_nl).unwrap(), "hi\n");
+
+        let err = read_json::<serde_json::Value>(&dir.path().join("missing.json")).unwrap_err();
+        assert!(matches!(err, StoreError::Io { .. }));
     }
 }

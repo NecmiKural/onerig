@@ -1,13 +1,14 @@
 //! Chat session persistence on disk (design sections 5 and 8):
 //! `<repo>/.onerig/sessions/<session id>/transcript.jsonl`, `lock`, and `raw-<n>.log`.
 
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::{Lock, LockError, Phase, RunDir, StoreError, sorted_entries};
+use crate::store::{
+    Lock, LockError, Phase, RunDir, StoreError, append_jsonl, create_sub_dir, open_dir, read_jsonl,
+    sorted_entries,
+};
 use crate::turn::{ChatMessage, Proposal};
 
 /// `<repo>/.onerig/sessions`.
@@ -22,25 +23,13 @@ pub struct SessionDir {
 
 impl SessionDir {
     pub fn create(repo: &Path, session_id: &str) -> Result<SessionDir, StoreError> {
-        let root = sessions_root(repo);
-        std::fs::create_dir_all(&root).map_err(|e| io_err(&root, e))?;
-        let path = root.join(session_id);
-        match std::fs::create_dir(&path) {
-            Ok(()) => Ok(SessionDir { path }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(StoreError::Exists(session_id.to_string()))
-            }
-            Err(e) => Err(io_err(&path, e)),
-        }
+        let path = create_sub_dir(&sessions_root(repo), session_id)?;
+        Ok(SessionDir { path })
     }
 
     pub fn open(repo: &Path, session_id: &str) -> Result<SessionDir, StoreError> {
-        let path = sessions_root(repo).join(session_id);
-        if path.is_dir() {
-            Ok(SessionDir { path })
-        } else {
-            Err(StoreError::NoRun(session_id.to_string()))
-        }
+        let path = open_dir(sessions_root(repo).join(session_id), session_id)?;
+        Ok(SessionDir { path })
     }
 
     pub fn latest(repo: &Path) -> Result<Option<String>, StoreError> {
@@ -80,45 +69,15 @@ impl SessionDir {
     }
 
     pub fn append(&self, record: &TranscriptRecord) -> Result<(), StoreError> {
-        let path = self.transcript_path();
-        let line = serde_json::to_string(record).map_err(|e| fmt_err(&path, e))?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| io_err(&path, e))?;
-        writeln!(file, "{line}").map_err(|e| io_err(&path, e))
+        append_jsonl(&self.transcript_path(), record)
     }
 
     pub fn read_transcript(&self) -> Result<Vec<TranscriptRecord>, StoreError> {
-        let path = self.transcript_path();
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(io_err(&path, e)),
-        };
-        text.lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).map_err(|e| fmt_err(&path, e)))
-            .collect()
+        read_jsonl(&self.transcript_path())
     }
 
     fn transcript_path(&self) -> PathBuf {
         self.path.join("transcript.jsonl")
-    }
-}
-
-fn io_err(path: &Path, error: std::io::Error) -> StoreError {
-    StoreError::Io {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    }
-}
-
-fn fmt_err(path: &Path, error: impl std::fmt::Display) -> StoreError {
-    StoreError::Format {
-        path: path.to_path_buf(),
-        message: error.to_string(),
     }
 }
 

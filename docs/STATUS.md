@@ -23,28 +23,17 @@ independent reviewers). The owner's decisions: `docs/designs/chat/concepts_brief
 | 6 | `Task.lane`, `Task.from_owner`, lane pinning, origin lines in every prompt, start a run from an approved plan on a base ref | done, `f0c3269` |
 | 7 | `Halt` (quit and per-action stop), `Send` runners | done, `f43234b` |
 | 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | done, `5585a67` |
-| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | done |
-| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | **next** |
-| 10 | Native Windows support (design section 10a) | to do |
+| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | done, `b6be8c1` |
+| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | done |
+| 10 | Native Windows support (design section 10a) | **next** |
 | 11 | `pi` adapter and the M365 lane; the owner runs the live task on Windows | to do |
 | 12 | copass reads `from_owner` (in the copass repository) | to do |
 
-## Next: step 9, concretely
+## Next: step 10, concretely
 
-1. **CLI entry & options (`crates/onerig/src/main.rs`)**:
-   - Running `onerig` with no subcommand opens the interactive chat screen
-     (requires a terminal).
-   - `--continue` reopens the latest session in the repository (chat-only).
-   - Global `--config <path>` works across chat, `run`, `resume`, `doctor`.
-2. **Chat screen & `/model` picker (`crates/onerig/src/chat/`)**:
-   - Conversation pane (`owner` / `planner` / `(btw)` / `system` / run log
-     records), Tasks + Roles/Lanes right panel (hidden below 80 cols), input
-     box with `Up`/`Down` history and `PgUp`/`PgDn` scroll.
-   - Commands: `/go`, `@<lane> <text>`, `/btw <text>`, `/model`, `/stop` /
-     `Ctrl-C`, `/quit` / `Ctrl-D`.
-   - `/model` modal picker: role → provider → model/effort/risk + ordered
-     worker chain editor, persisting atomically to `config.toml` and rebuilding
-     `Lanes`.
+1. **Native Windows support (`docs/designs/chat/design_draft.md` §10a)**:
+   - Isolate POSIX/Windows platform specifics (`process.rs` process groups / Job objects, `store.rs` file locking, signal handling in `crates/onerig/src/main.rs`) under `#[cfg(unix)]` / `#[cfg(windows)]`.
+   - Ensure `XDG_CONFIG_HOME` / `LOCALAPPDATA` / `APPDATA` resolution, binary invocation (`.cmd`/`.exe`), and path handling pass cleanly under Windows targets.
 
 ## Rules for whoever continues
 

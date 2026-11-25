@@ -69,14 +69,19 @@ quota_group = "Gemini Models"
 
 The file lives at `$XDG_CONFIG_HOME/onerig/config.toml`
 (`~/.config/onerig/config.toml` by default); `--config` points elsewhere.
+Any automatic lane (`claude`, `codex` with `provider = "deepseek"` or
+`"openai"`, or `agy` in `direct` mode) can fill any role (`planner`, `reviewer`,
+`worker`), and `worker` also accepts `agy` in `handover` mode. Both role
+assignments and the ordered `worker` fail-over chain can be edited in
+`config.toml` or interactively in chat with `/model`.
 
-- **Claude Code** plans and reviews through `claude -p` on your own login.
-- **DeepSeek** works through `codex exec` with its own `CODEX_HOME`, so your
-  `~/.codex` and its login are left alone. Codex reads the key from
-  `DEEPSEEK_API_KEY`; onerig never sees it.
+- **Claude Code** plans (`opus` by default), reviews, or works through `claude -p` on your own login.
+- **DeepSeek / OpenAI (`codex`)** runs through `codex exec` with its own
+  `CODEX_HOME`, so your `~/.codex` and its login are left alone (`provider = "deepseek"`
+  reads `DEEPSEEK_API_KEY`; `provider = "openai"` uses your OpenAI Codex sign-in).
 - **Antigravity (`agy`)** is a manual lane by default: onerig writes the
   hand-over, pauses and tells you how to continue in `agy`, then reviews what
-  you did after `onerig resume`.
+  you did after `/go` or `onerig resume`.
 
 ### A warning about `agy` in `direct` mode
 
@@ -99,10 +104,22 @@ onerig needs git and the harness CLIs your lanes use (`claude`, `codex`,
 ## Commands
 
 ```text
+onerig                     open the interactive chat screen
+onerig --continue          reopen the latest chat session in this repository
 onerig run "<goal>"        start a run in the current repository
 onerig resume [<run id>]   continue the latest (or the given) unfinished run
 onerig doctor              check every lane; makes no model call
 ```
+
+Inside interactive chat:
+
+- Type freely to talk with the planner until it proposes a plan.
+- `/go` approves a waiting plan (or resumes a paused run).
+- `@<lane> <task>` runs a single owner task directly on that worker lane.
+- `/btw <question>` asks the planner a side question while a run is working.
+- `/model` opens the modal picker for role providers, models, Claude effort,
+  and the ordered worker fail-over chain (saved to `config.toml`).
+- `/stop` (or `Ctrl-C`) stops the current action; `/quit` (or `Ctrl-D`) exits.
 
 In a terminal, `run` and `resume` show a live screen with the tasks, the lanes
 and the activity; `q` stops the run so that `resume` can continue it later.

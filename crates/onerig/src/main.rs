@@ -1,6 +1,7 @@
-//! The `onerig` command: `run` starts a run, `resume` continues one, `doctor`
-//! checks the lanes.
+//! The `onerig` command: no subcommand opens the interactive chat screen,
+//! `run` starts a one-shot run, `resume` continues one, `doctor` checks lanes.
 
+mod chat;
 mod doctor;
 mod lanes;
 mod plain;
@@ -12,11 +13,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use onerig_core::config::{self, Config, ConfigError};
 use onerig_core::halt::Halt;
-use onerig_core::run::{self, Env, Exit, Finished};
+use onerig_core::run::{self, Exit, Finished};
+use onerig_core::session::SessionDir;
 use onerig_core::store::LogRecord;
 use onerig_core::worktree::{Git, data_home};
 
@@ -25,8 +27,14 @@ use onerig_core::worktree::{Git, data_home};
 #[derive(Parser)]
 #[command(name = "onerig", version)]
 struct Cli {
+    /// Reopen the latest chat session in the current repository.
+    #[arg(long = "continue")]
+    resume_session: bool,
+    /// Configuration file; default $XDG_CONFIG_HOME/onerig/config.toml.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -44,11 +52,7 @@ enum Command {
         options: Options,
     },
     /// Check that every lane can run. Makes no model call.
-    Doctor {
-        /// Configuration file; default $XDG_CONFIG_HOME/onerig/config.toml.
-        #[arg(long)]
-        config: Option<PathBuf>,
-    },
+    Doctor,
 }
 
 #[derive(clap::Args)]
@@ -56,9 +60,6 @@ struct Options {
     /// Print one line per event instead of the terminal UI.
     #[arg(long)]
     plain: bool,
-    /// Configuration file; default $XDG_CONFIG_HOME/onerig/config.toml.
-    #[arg(long)]
-    config: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -81,35 +82,87 @@ struct Session<'s> {
 }
 
 fn run_cli(cli: Cli) -> anyhow::Result<ExitCode> {
-    let (config_arg, plain_wanted) = config_and_mode(&cli.command);
-    let Some(config) = load_config(config_arg)? else {
+    if cli.resume_session && cli.command.is_some() {
+        bail!("--continue can only be used without a subcommand");
+    }
+    let cfg_path = config_path(cli.config.as_deref())?;
+    let Some(config) = load_config(&cfg_path)? else {
         return Ok(ExitCode::from(2));
     };
     let stop = watch_signals()?;
     let data = data_dir()?;
     let cwd = std::env::current_dir().context("cannot read the current directory")?;
-    let mut runner = lanes::Lanes::build(&config, &stop, &cwd, &data)?;
-    if let Command::Doctor { .. } = cli.command {
-        return Ok(run_doctor(&config, &mut runner));
+
+    let Some(command) = cli.command else {
+        return run_chat(config, cfg_path, &cwd, data, stop, cli.resume_session);
+    };
+    dispatch_command(&command, &config, &cwd, &data, &stop)
+}
+
+fn dispatch_command(
+    command: &Command,
+    config: &Config,
+    cwd: &Path,
+    data: &Path,
+    stop: &Halt,
+) -> anyhow::Result<ExitCode> {
+    let mut runner = lanes::Lanes::build(config, stop, cwd, data)?;
+    if matches!(command, Command::Doctor) {
+        return Ok(run_doctor(config, &mut runner));
     }
+    let plain_wanted = match command {
+        Command::Run { options, .. } | Command::Resume { options, .. } => options.plain,
+        Command::Doctor => true,
+    };
     let session = Session {
-        command: &cli.command,
-        config: &config,
-        cwd: &cwd,
-        data: &data,
-        stop: &stop,
+        command,
+        config,
+        cwd,
+        data,
+        stop,
     };
     run_session(&session, &mut runner, plain_wanted)
 }
 
-/// The configuration file to use, and whether plain output was asked for.
-fn config_and_mode(command: &Command) -> (Option<&Path>, bool) {
-    match command {
-        Command::Run { options, .. } | Command::Resume { options, .. } => {
-            (options.config.as_deref(), options.plain)
-        }
-        Command::Doctor { config } => (config.as_deref(), true),
+fn run_chat(
+    config: Config,
+    config_path: PathBuf,
+    cwd: &Path,
+    data_home: PathBuf,
+    stop: Halt,
+    resume: bool,
+) -> anyhow::Result<ExitCode> {
+    let main_repo = chat::ensure_session_repo(cwd)?;
+    let session = open_chat_session(&main_repo, resume)?;
+    ensure_interactive_terminal()?;
+    let _lock = session.lock()?;
+    chat::run(chat::ChatContext {
+        config,
+        config_path,
+        main_repo,
+        data_home,
+        stop,
+        session,
+        resume,
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn ensure_interactive_terminal() -> anyhow::Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("interactive chat requires a terminal; use `onerig run \"<goal>\" --plain` instead");
     }
+    Ok(())
+}
+
+fn open_chat_session(main_repo: &Path, resume: bool) -> anyhow::Result<SessionDir> {
+    if !resume {
+        let id = chat::new_session_id(std::process::id());
+        return Ok(SessionDir::create(main_repo, &id)?);
+    }
+    let id = SessionDir::latest(main_repo)?
+        .context("there is no session to continue in this repository")?;
+    Ok(SessionDir::open(main_repo, &id)?)
 }
 
 fn run_doctor(config: &Config, runner: &mut lanes::Lanes) -> ExitCode {
@@ -150,7 +203,7 @@ fn execute(
     sink: &mut dyn FnMut(&LogRecord),
 ) -> anyhow::Result<ExitCode> {
     let git = Git::new();
-    let env = Env {
+    let env = onerig_core::run::Env {
         git: &git,
         runner,
         clock: &now_ms,
@@ -170,7 +223,6 @@ fn execute_on_screen(session: &Session<'_>, runner: &mut lanes::Lanes) -> anyhow
     let finished = Arc::new(AtomicBool::new(false));
     let mut terminal = ratatui::init();
     let keys = tui::watch_keys(session.stop.clone(), Arc::clone(&finished));
-    // A frame that cannot be drawn is skipped; the next record draws again.
     let _ = terminal.draw(|frame| screen.render(frame));
     let result = execute(session, runner, &mut |record| {
         screen.apply(record);
@@ -190,12 +242,12 @@ fn dispatch<'a>(
     command: &Command,
     config: &'a Config,
     cwd: &Path,
-    env: Env<'a>,
+    env: onerig_core::run::Env<'a>,
 ) -> Result<Finished, run::RunError> {
     match command {
         Command::Resume { run_id, .. } => run::resume(config, cwd, run_id.as_deref(), env),
         Command::Run { goal, .. } => run::start(config, cwd, goal, env),
-        Command::Doctor { .. } => unreachable!("doctor is answered before a run starts"),
+        Command::Doctor => unreachable!("doctor is answered before a run starts"),
     }
 }
 
@@ -233,10 +285,9 @@ fn config_path(given: Option<&Path>) -> anyhow::Result<PathBuf> {
 }
 
 /// `None` when there is no configuration file yet; an example is printed.
-fn load_config(given: Option<&Path>) -> anyhow::Result<Option<Config>> {
-    let path = config_path(given)?;
+fn load_config(path: &Path) -> anyhow::Result<Option<Config>> {
     let allow_fake = std::env::var_os("ONERIG_TEST").is_some();
-    match config::load(&path, allow_fake) {
+    match config::load(path, allow_fake) {
         Ok(config) => Ok(Some(config)),
         Err(error @ ConfigError::Missing(_)) => {
             eprintln!("onerig: {error}\n\n{}", config::EXAMPLE);
