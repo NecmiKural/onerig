@@ -1,17 +1,13 @@
 # onerig chat — design draft
 
-Status: draft 2, 2026-11-25. Follows `concepts_brief.md`. Draft 2 resolves
-the findings of five independent reviews of draft 1; section 14 lists what
-changed. Statements about a harness are marked **[observed]** when they were
-checked on the owner's machine and **[unobserved]** when they come from
-documentation.
+Status: draft 3, 2026-11-25. Follows `concepts_brief.md`. Draft 3 incorporates `/btw`, native Windows, flexible role/provider/model selection, and `/model` after a five-reviewer EGM Goldfish pass. Statements about a harness are marked **[observed]** when they were checked on the owner's machine and **[unobserved]** when they come from documentation or `--help` output.
 
 ## 1. onerig today, in one paragraph
 
-`onerig run "<goal>"` asks a **planner** (Claude Code, read-only) to split a
+`onerig run "<goal>"` asks a **planner** (Claude Code `opus` by default, read-only) to split a
 goal into tasks, gives each task to the first available **worker lane** in a
 separate git worktree on branch `onerig/<run id>`, has a **reviewer** (Claude
-Code) judge the task's diff, and commits each approved task. A lane is a
+Code `sonnet` by default) judge the task's diff, and commits each approved task. A lane is a
 `[lanes.<name>]` entry: a harness (`claude`, `codex`, `agy`), a model and a
 mode (`direct`: onerig starts the harness; `handover`: onerig writes a
 hand-over file and a person runs the harness; `off`). When a worker lane runs
@@ -48,10 +44,13 @@ harness brings Microsoft 365 Copilot in through m365-copilot-proxy.
 |--------|--------------|---------------------|
 | `run::start` accepts an already approved plan and skips `planning`. | §5 | None; the run files look as if the planner had run. |
 | A new run in a session starts from the session's latest **done** run's branch, not from the main checkout's HEAD. | §10 | `create_run_worktree` takes a base ref. |
-| `Task` gains two optional fields: `lane` (pins the task to one lane, no fallback) and `from_owner` (the task's words are the owner's). | §8, §12 | `plan.json` v1 gains optional fields; old readers ignore them. copass should read `from_owner` (section 11). |
+| `Task` gains two optional fields: `lane` (pins the task to one lane, no fallback) and `from_owner` (the task's words are the owner's). | §7, §12 | `plan.json` v1 gains optional fields; old readers ignore them. copass should read `from_owner` (section 11). |
 | Every prompt starts with an origin line (section 7). | §7 | Prompt text only. |
-| The runner checks two flags: `quit` (signals, never cleared) and `stop` (one per action, cleared when an action starts). | §6 | Runner construction. |
-| `Adapter` and the runners are `Send`, so an action can own the runner on a worker thread. | §7 | Trait bound. |
+| The runner checks two flags: `quit` (signals, never cleared) and `stop` (one per action, cleared when an action starts). | §5, §8 | Runner construction. |
+| Runners are `Send` (matching `Adapter: Send`), so an action can own the runner on a worker thread. | §8 | Trait bound. |
+| Any automatic lane (`mode = "direct"`, covering `claude`, `codex`, and `direct`-mode `agy`; `pi` stays worker-only; `fake` works in any role under `ONERIG_TEST`) can serve `planner`, `reviewer`, or `worker`; manual (`handover`) and `off` lanes stay worker-only. | §9, §11 | Role validation and role-aware `Adapter::spawn` / `outcome`. |
+| `lanes.<name>.provider` on `codex` lanes selects `"deepseek"` (default, isolated `CODEX_HOME`) or `"openai"` (user's `codex login` with `--ignore-user-config --ephemeral`). | §9.3, §11 | Optional `provider` config key; `Codex` probe and schema support. |
+| Default planner example uses Claude `model = "opus"`; `/model` edits role/provider/model/worker-chain assignments and atomically saves `config.toml`. | §11, §14 | `config::to_toml`, `config::save`, `catalog`, and `/model` modal picker. |
 | A `pi` harness; `base_url` lane key; `accept_vendor_terms_risk` applies to `pi` as well as `agy`. | §9, §11 | New config keys and values. |
 
 Unchanged: no new pause reason, no new run phase, `onerig run`, `resume`,
@@ -80,7 +79,7 @@ job stays fresh (`--no-session-persistence`).
 
 ### 6.1 Text: a planner turn
 
-Each turn is one fresh `claude -p` job (role planner, read-only tools), in
+Each turn is one fresh job on `roles.planner` (Claude `opus` by default; read-only tools), in
 the directory of section 5. Its prompt carries:
 
 1. The planner role, which now says: you talk with the owner; you plan for
@@ -102,12 +101,8 @@ The answer follows a new schema, checked by a new parser in onerig-core:
   what the owner wants; the tasks follow today's plan rules (ids, titles of
   at most 100 characters, acceptance criteria). An invalid proposal is
   retried once with the validator's message, then shown as an error.
-- A new proposal replaces the waiting one.
-
-Failures of a turn: quota or sign-in failure, or two invalid answers, end
-the turn with one system line in the conversation; the owner's message stays
-in the transcript and can be sent again with Up and Enter. Nothing else
-changes.
+- **Waiting plan lifecycle:** A new proposal replaces the waiting one. An answer-only turn (`tasks: []`) leaves an existing waiting plan intact; `/go` or `@<lane>` clears it only when `/go` consumes it into a run (`@<lane>` runs a one-task run without erasing a waiting proposal).
+- **Retry:** Non-JSON output, missing `structured_output`, or a validation error (`FormatError`) triggers one automatic retry with the error message appended to the prompt, written to the next `raw-<n>.log`. Quota or sign-in failure, or two invalid answers, end the turn with one system line; the owner's message stays in the transcript and can be sent again with Up and Enter. Nothing else changes.
 
 ### 6.2 `/go`
 
@@ -123,8 +118,8 @@ owner's text as the instructions, the first line of the text (cut at 100
 characters) as the title, id `owner-1`, acceptance "What the owner asked
 for is done.", and the owner's text as the run's goal.
 
-- `<lane>` must be a lane in `roles.worker`. The planner's and reviewer's
-  lanes and unknown names are refused with a one-line reason.
+- `<lane>` must be a non-`off` lane in `roles.worker`. Unknown, `off`, or non-worker lanes are refused with a one-line reason.
+- Writes a `run` transcript record with `"from_owner": true`.
 - The task is reviewed and committed like any task. If the lane runs out of
   quota, the run pauses with `no_lane` (the pin allows no fallback).
 - Questions belong to the planner; a worker task that changes nothing fails
@@ -136,6 +131,7 @@ for is done.", and the owner's text as the run's goal.
 |-------|--------|
 | `/go` | Section 6.2. |
 | `/btw <text>` | A side question to the planner, answered while an action works (section 6.6). When nothing works, the same as plain text. |
+| `/model` | Open the role, provider, model, and worker-chain picker (section 6.7). Refused while an action works. |
 | `/stop`, Ctrl-C | Sets the action's `stop` flag. A planner turn ends; a run pauses `interrupted`. |
 | `/quit`, Ctrl-D | Stop the action, wait for its worker thread (the driver kills the harness's process group), restore the terminal, exit 0. |
 | Up / Down | Previous / next own message into the input line. |
@@ -147,7 +143,7 @@ for is done.", and the owner's text as the run's goal.
 |-------|--------|
 | `/stop`, `/quit`, keys | Act at once. |
 | `/btw <text>` | Answered by a side planner turn, section 6.6. |
-| Text, `/go`, `@lane` | Refused with "busy: <action> — use /btw to ask meanwhile"; the text stays in the input line. |
+| Text, `/go`, `@lane`, `/model` | Refused with "busy: <action> — use /btw to ask meanwhile"; the text stays in the input line. |
 
 ### 6.6 `/btw`: talking while the work goes on
 
@@ -171,12 +167,84 @@ to the running action, so the run is not interrupted:
   take their prompt once. Telling a running worker something new
   ("steering") stays out of scope.
 
+### 6.7 `/model` and flexible role providers
+
+The owner can assign providers and models to `planner`, `reviewer`, and
+`worker` either in `config.toml` or interactively via `/model`.
+
+#### Role and provider rules (`config.toml`)
+
+- **Default configuration:** `roles.planner` uses `claude` with `model = "opus"`
+  (`effort = "medium"`); `roles.reviewer` uses `claude` with `model = "sonnet"`
+  (`effort = "low"`). `RawRoles` keeps single-element TOML arrays (`planner = ["plan"]`,
+  `reviewer = ["review"]`).
+- **Role flexibility:** `roles.planner` and `roles.reviewer` accept any single
+  existing automatic lane (`mode = "direct"` — i.e., `claude`, `codex`, or
+  `agy` with `mode = "direct"`, plus `fake` under `ONERIG_TEST`; `pi` stays
+  worker-only). Manual (`mode = "handover"`) and `off` lanes are rejected for
+  `planner` and `reviewer`. `roles.worker` accepts any ordered list of distinct
+  existing lanes (`claude`, `codex`, `agy`, `pi`, or `fake`), with at least one
+  non-`off` lane.
+- **`codex` providers:** `lanes.<name>.provider` is an optional key valid only
+  on `codex` lanes:
+  - `"deepseek"` (default when omitted, preserving existing configs): sets
+    `CODEX_HOME=<data home>/onerig/codex/<lane>` (on Unix `$XDG_DATA_HOME/onerig`
+    or `~/.local/share/onerig`) with generated `config.toml` pointing to
+    `https://api.deepseek.com/` and `DEEPSEEK_API_KEY`; probes with
+    `codex --version`, `codex exec --help`, and `[ -n "$DEEPSEEK_API_KEY" ]`
+    via shell (replaced by a cross-platform env check in Step 10).
+  - `"openai"`: leaves `CODEX_HOME` unset (using the user's `codex login` in
+    `~/.codex`) and writes no `config.toml`; passes `--ignore-user-config` and
+    `--ephemeral` **[observed flags via `codex exec --help`]**; probes with
+    `codex --version`, `codex exec --help`, and `codex login status` **[observed: `Logged in using ChatGPT`]**.
+
+#### Role-aware adapter behaviour
+
+| Harness | `Worker` | `Planner` / `Reviewer` |
+|---------|----------|------------------------|
+| `claude` | `--safe-mode --permission-mode dontAsk --tools Read Edit Write Glob Grep Bash --allowedTools Read Edit Write Glob Grep Bash --disallowedTools AskUserQuestion` **[unobserved]** (no `--append-system-prompt`). | `--safe-mode --permission-mode dontAsk --tools Read Glob Grep --disallowedTools AskUserQuestion`, `--append-system-prompt <role>`, and `--json-schema <schema>` **[observed]**. |
+| `codex` | `--sandbox workspace-write` **[observed]**. | `--sandbox read-only` **[unobserved]**; role sentence prepended to `stdin`. When `job.schema` is set: `openai` writes `<raw_log_stem>.schema.json` in `job.run_dir` (unique per job so `/btw` never races) and passes `--output-schema <file>` **[unobserved]**; `deepseek` appends a JSON-schema instruction to `stdin` **[unobserved]**; `outcome` extracts the JSON object from the final message text (or fails `Unknown` if none). |
+| `agy` (`direct`) | `--dangerously-skip-permissions --sandbox` **[observed]**. | `--mode plan --sandbox` **[unobserved]** (without `--dangerously-skip-permissions`), role sentence prepended to prompt, and `--json-schema <schema>` **[unobserved]** (note: on Windows, prompts longer than 8191 chars still hit the `cmd.exe` argument limit until Step 10); `outcome` reads `structured_output` or extracts a JSON object from `result.response` (or fails `Unknown`). |
+
+#### Interactive `/model` modal picker
+
+Opening `/model` (while idle) shows a modal overlay over the chat screen
+(`Esc` / `q` closes, `Enter` selects/confirms):
+
+1. **Role list:** `planner`, `reviewer`, `worker` — each showing its current
+   provider, model, effort/mode, or worker fail-over chain summary.
+2. **Editing `planner` or `reviewer`:**
+   - Choose a provider: `Anthropic (Claude Code)`, `OpenAI (Codex)`,
+     `DeepSeek (Codex)`, or `Antigravity (direct)`.
+   - Choose a model from the provider's curated catalog (or live `agy models`
+     output fetched once off-thread when `/model` opens and `agy` is available)
+     or type a custom model name. On Claude lanes, `Tab` cycles `effort` (`low` → `medium` → `high`).
+   - Choosing `Antigravity (direct)` when no lane already has
+     `accept_vendor_terms_risk = true` shows the vendor-terms risk confirmation
+     before applying (`y` to accept, `Esc`/`n` to cancel). `quota_group` is
+     derived automatically (`"Claude and GPT models"` for `claude-*`/`gpt-*`,
+     else `"Gemini Models"`), preserving any existing custom `quota_group`.
+3. **Editing `worker`:**
+   - Displays the ordered `roles.worker` fail-over chain (preserving any `pi` or `fake` lanes).
+   - `Enter` edits the selected entry's provider (including `Antigravity (manual handover)`) and model;
+     `a` appends a new provider/model lane; `x` / `Delete` removes the selected
+     entry (refused if it is the sole active worker); `[` / `]` (and
+     `Shift+Up` / `Shift+Down`) moves the selected entry earlier or later in the
+     fail-over chain.
+4. **Persistence:** Confirming a change updates the active `Config` (using
+   dedicated lane names per role or forking a name if shared so other roles
+   are never mutated unexpectedly), atomically writes the active `config.toml`
+   (omitting harness-inapplicable fields such as `effort` on non-`claude` lanes
+   so `config::parse` round-trips cleanly), rebuilds the `Lanes` runner,
+   refreshes the right-hand panel, and records a concise system line in the
+   conversation.
+
 ## 7. Origin lines
 
 Every prompt onerig builds starts with exactly one of these lines:
 
-| Prompt | Lines (as built in step 6) |
-|--------|------|
+| Prompt | Lines |
+|--------|-------|
 | Planner, `onerig run` | `From onerig, not from a person. The Goal line is the owner's own words.` |
 | Planner turn in the chat | `From onerig, not from a person. The conversation below is between the owner (a person) and you; only lines marked owner: are the owner's words.` (step 8) |
 | Worker, planned task | Header line 2 starts `From onerig, on behalf of the planner agent; not from a person, and nobody can answer questions.`; line 4 is `The Goal line states what the owner asked for; the task below was written from it by the planner agent.` |
@@ -201,21 +269,26 @@ owner's origin.
 {"ts":1764000400000,"kind":"system","text":"planner turn failed: quota (resets 14:00)"}
 ```
 
-The conversation pane shows transcript records and, after each `run`
-record, that run's log records: live through the run's sink, and on
-`--continue` by reading `log.jsonl` again. A run log record is labelled as
-follows (the role comes from the last `phase` record):
+Optional `"btw": true` appears on `owner` and `planner` records from `/btw`.
+Transcript records render as `owner → planner` (or `owner → planner (btw)`),
+`planner → owner` (plus proposed tasks when `plan` is present), and `system`
+notices. After each `run` record, the pane shows that run's log records (live
+through the run's sink, and on `--continue` by reading `log.jsonl` together
+with `plan.json` for task titles and `from_owner`):
 
 | Log record | Shown as |
 |------------|----------|
-| `state.run`, `state.plan` | `onerig  run <id>: <n> tasks` |
+| `state.run` | `onerig  run <id>: <goal>` |
+| `state.plan` | `onerig  plan: <n> tasks` |
 | `policy.lane_selected` | `planner → <lane> [agent] t<n> <title>` or `owner → <lane> [owner] t<n> <title>` |
 | `harness.tool` | `  <lane>  <tool> <detail>` |
 | `harness.started`, `harness.text`, `policy.quota`, `policy.probe` | not shown (the panel shows lanes) |
 | `state.verdict` | `reviewer → owner  <verdict>: <summary>` |
 | `state.commit` | `onerig  commit <hash> <title>` |
-| `state.paused`, `state.failed`, `state.done` | `onerig  <phase>: <message>` |
-| `policy.lane_exhausted`, `policy.handover` | `onerig  <lane> out of quota → hand-over` |
+| `state.paused`, `state.failed` | `onerig  <phase>: <message>` |
+| `state.done` | `onerig  done: branch <branch>` |
+| `policy.lane_exhausted` | `onerig  <lane> out of quota` |
+| `policy.handover` | `onerig  <lane> hand-over → <path>` |
 
 The panel shows the current run's tasks (✓ done, ▸ current, · waiting, or
 "proposed" for a waiting plan) and the lanes with probe and quota state, as
@@ -229,9 +302,13 @@ today's dashboard does. Below 80 columns the panel is hidden.
   the result. If the worker panics, the runner is rebuilt from the
   configuration and the panic message is shown as a system line.
 - A `/btw` side turn runs on a second worker thread with a second runner
-  (section 6.6); its records go over the same channel, tagged as side.
-- `/quit` and a signal: set `stop`, join the workers, then restore the
-  terminal. A run stopped this way pauses `interrupted` and resumes later.
+  (section 6.6) whose `Halt` shares `quit` with the main `Halt` via
+  `Halt::with_shared_quit` so `/stop` cancels only the main action while
+  `/quit` and signals stop both; its records go over the same channel, tagged
+  as side.
+- `/quit` sets both `quit` and `stop`; signals set `quit` (checked by
+  `is_set()`), join any running workers, then restore the terminal. A run
+  stopped this way pauses `interrupted` and resumes later.
 
 ## 10. The `pi` harness and the M365 lane
 
@@ -272,7 +349,7 @@ The prompt is written to a file in the run directory and passed as
 
 - Tools: the lean file set the proxy recommends, without `bash`. Whether
   adding `bash` helps (the proxy's "shell-routing") is decided by the live
-  task in step 10, not by a setting.
+  task in step 11, not by a setting.
 - `parse`: `tool_execution_end` → a tool line (name; `path` or `command`
   from its args). The assistant's first `message_start` → started.
 - `outcome`: `Done` when the exit code is 0 and the last assistant
@@ -350,13 +427,22 @@ Also needed on Windows:
 |------|---------|-----------|--------------|
 | 6 | `Task.lane` and `Task.from_owner`; lane pinning in selection; origin lines in all prompts; run from a given plan; base ref for a run's worktree. | Done 2026-11-25: unit and state-machine tests pass with the fake runner. | no |
 | 7 | Two stop flags; `Send` runners. | Done 2026-11-25: `Halt` holds a quit flag (signals, never cleared) and a stop flag (cleared per action); tests show a cleared stop lets the next action run and a quit keeps pausing; runners are `Send`. | no |
+| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, provider/model catalog, `config::to_toml` & `config::save`. | Unit and adapter tests pass; config round-trips cleanly; quality gates green. | no |
 | 8 | Planner turn: schema, parser, prompt, raw logs in the session; transcript files and the session lock. | Fixture of two real turns (one answer, one proposal) captured; tests pass. | yes, two small calls |
-| 9 | Chat screen: input, conversation, panel, commands, `/btw` side turns, `--continue`. | A scripted session, with a `/btw` answered while a run works, renders with `TestBackend`; manual check in a terminal. | no |
+| 9 | Chat screen: input, conversation, panel, commands, `/btw` side turns, `/model` role/provider/model/worker-chain picker, `--continue`. | A scripted session, with a `/btw` answered while a run works and `/model` config persistence, renders with `TestBackend`; manual check in a terminal. | no |
 | 10 | Windows (section 10a). | CI is green on Windows; on the owner's Windows computer `onerig doctor` probes the lanes and one fake-lane run ends done. | no (owner's machine) |
 | 11 | `pi` adapter and the M365 lane. | One real task through the proxy, run by the owner on Windows, captured as a fixture. Needs the owner's pi, proxy and sign-in, and an explicit go-ahead. | yes |
 | 12 | copass reads `from_owner` (copass repository). | copass test with an owner task passes. | no |
 
-## 14. Changes from draft 1
+## 14. Changes across drafts
+
+Draft 3 (2026-11-25) added `/btw` side turns (§6.6), native Windows (§10a),
+flexible role/provider/model selection and `/model` persistence (§6.7, step 7b),
+and resolved the five-reviewer Goldfish pass (dedicated `Halt::with_shared_quit`
+for `/btw`, per-job schema file paths, derived `agy` `quota_group`, `to_toml`
+key filtering, and explicit transcript/log rendering rules).
+
+Draft 2 changes from draft 1:
 
 - A proposed plan no longer creates a run. It waits in the session; `/go`
   creates the run. This removes the `plan_approval` pause, the leftover

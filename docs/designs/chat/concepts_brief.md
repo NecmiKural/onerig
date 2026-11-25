@@ -28,10 +28,11 @@ to it, read the answers, and watch the work happen in one place.
 | Question | Decision |
 |----------|----------|
 | Layout | The conversation on the left; the tasks and the lanes in a panel on the right; the input box along the bottom. |
-| Where a message goes | To the planner (Claude Code) by default. `@<lane> <text>` sends it straight to that lane. Every agent is told whether the message came from the owner or from another agent. |
+| Where a message goes | To the planner (Claude Code `opus` by default) unless changed in config or via `/model`. `@<lane> <text>` sends it straight to that lane. Every agent is told whether the message came from the owner or from another agent. |
 | When workers start | Only after the owner approves the plan. A correction typed while a plan waits goes back to the planner, which revises the plan. |
 | M365 Copilot | A worker lane that drives `pi` pointed at the proxy, the path the proxy itself documents and verifies. Opt-in with an explicit risk flag, like `agy` direct mode, because it uses a work account through an unofficial client. |
 | Talking while agents work | `/btw <text>`, like Claude Code's: a side question to the planner while a run goes on (added the same day). |
+| Role, provider and model selection | Default planner is Claude (`opus`), reviewer is Claude (`sonnet`). Any automatic provider (`claude`, `codex` with `openai` or `deepseek`, `agy` direct) can serve any role (`pi` stays worker-only); `worker` supports ordered fail-over chain editing (including `agy` manual handover). Editable in `config.toml` and interactively via `/model` (added 2026-11-25). |
 | Windows | onerig runs natively on Windows; the owner tests the M365 lane from a Windows computer (added the same day). |
 
 ## Constraints carried over
@@ -50,4 +51,3 @@ to it, read the answers, and watch the work happen in one place.
 - Steering a worker while its process runs (pi's RPC mode could allow it
   later).
 - Images and file attachments in the chat.
-- A second planner harness: the planner stays Claude Code.

@@ -22,36 +22,29 @@ independent reviewers). The owner's decisions: `docs/designs/chat/concepts_brief
 |------|------|-------|
 | 6 | `Task.lane`, `Task.from_owner`, lane pinning, origin lines in every prompt, start a run from an approved plan on a base ref | done, `f0c3269` |
 | 7 | `Halt` (quit and per-action stop), `Send` runners | done, `f43234b` |
-| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | **next** |
-| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `--continue` | to do |
+| 7b | Flexible role assignment, `codex` `provider` (`deepseek`/`openai`), `opus` planner default, role-aware `claude`/`codex`/`agy` adapters, catalog, `config::to_toml` & `config::save` | **next** |
+| 8 | Planner turn: answer schema and parser, prompt with the conversation, session files, transcript, session lock | to do |
+| 9 | Chat screen: input, conversation, panel, commands, `/btw`, `/model` picker, `--continue` | to do |
 | 10 | Native Windows support (design section 10a) | to do |
 | 11 | `pi` adapter and the M365 lane; the owner runs the live task on Windows | to do |
 | 12 | copass reads `from_owner` (in the copass repository) | to do |
 
-## Next: step 8, concretely
+## Next: step 7b, then step 8
 
-Read design sections 5, 6.1, 6.6, 8 and 13 first. Then, test first:
-
-1. **Answer schema and parser** in onerig-core: `{ "reply", "goal", "tasks" }`.
-   Empty `tasks` is an answer only. Non-empty `tasks` is a proposal checked
-   by the same rules as `parse_plan` (`plan.rs`), which already rejects
-   `lane` and `from_owner` from a planner.
-2. **Prompt** for a planner turn: the origin line of design section 7, the
-   newest owner and planner messages (at most 40 messages or 24,000
-   characters, oldest first, labelled `owner:` and `planner:`), and the
-   waiting plan if any, marked "proposed, not approved". A `/btw` side turn
-   also carries the current run's goal and task states and may not propose.
-3. **Session files**: `<repo>/.onerig/sessions/<session id>/transcript.jsonl`
-   (records of kinds `owner`, `planner`, `run`, `system`; design section 8),
-   `lock` (reuse `store::Lock`), and `raw-<n>.log` for planner turns.
-4. **A planner-turn function** that runs one fresh `claude -p` job with role
-   planner (read-only tools, `--no-session-persistence` stays), retries an
-   invalid proposal once with the validator's message, and maps quota, auth
-   and stop to results the chat can show.
-5. **Live capture**: two real planner turns on a toy repository (one plain
-   answer, one proposal) saved as fixtures under
-   `crates/onerig-core/tests/fixtures/claude/`, like the existing ones.
-   These are small paid calls; tell the owner before making them.
+1. **Step 7b** (flexible role/provider/model support):
+   - Default planner model `opus` in `config::EXAMPLE`; `codex` `provider`
+     (`"deepseek"` default or `"openai"`).
+   - Allow any automatic (`mode = "direct"`) lane to serve `planner`,
+     `reviewer`, or `worker`; update `Claude`, `Codex`, and `Agy` adapters for
+     role-aware tools, sandboxing, and structured output extraction.
+   - Add `catalog.rs` and `config::to_toml` / `config::save`.
+2. **Step 8** (planner turn & sessions; read design sections 5, 6.1, 6.6, 8 and 13):
+   - Answer schema and parser (`{ "reply", "goal", "tasks" }`), conversation
+     prompt (`40` messages / `24,000` chars), `SessionDir` + `transcript.jsonl`
+     + session lock + `raw-<n>.log`, and `run_turn`.
+   - Live capture (approved by the owner): two small `claude -p` planner turns
+     on a toy repo under `target/` saved as sanitized fixtures under
+     `crates/onerig-core/tests/fixtures/claude/`.
 
 ## Rules for whoever continues
 
